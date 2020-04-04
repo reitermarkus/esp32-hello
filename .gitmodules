@@ -1,7 +1,7 @@
 [submodule "esp-idf"]
 	path = esp-idf
-	url = git@github.com:espressif/esp-idf.git
+	url = https://github.com/espressif/esp-idf.git
 
 [submodule "esp-idf-sys"]
 	path = esp-idf-sys
-	url = git@github.com:reitermarkus/esp-idf-sys.git
+	url = https://github.com/reitermarkus/esp-idf-sys.git
