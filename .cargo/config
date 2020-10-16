@@ -1,3 +1,6 @@
+[unstable]
+build-std = ["std"]
+
 [target.xtensa-esp8266-none-elf]
 rustflags = [
   "-C", "embed-bitcode=yes", # https://github.com/japaric/xargo/issues/292
