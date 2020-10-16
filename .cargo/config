@@ -1,5 +1,5 @@
 [unstable]
-build-std = ["std"]
+build-std = ["std", "panic_abort"]
 
 [target.xtensa-esp8266-none-elf]
 rustflags = [
