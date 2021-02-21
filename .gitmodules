@@ -5,5 +5,5 @@
 
 [submodule "esp-idf"]
   path = esp-idf
-  url = https://github.com/espressif/esp-idf.git
-  branch = release/v4.2
+  url = https://github.com/reitermarkus/esp-idf.git
+  branch = "patch-1"
