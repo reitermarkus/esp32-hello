@@ -13,4 +13,4 @@ panic = "unwind"
 opt-level = "s"
 
 [patch.crates-io]
-esp32-hal = { git = "https://github.com/esp-rs/esp32-hal" }
+esp-idf-bindgen = { git = "https://github.com/reitermarkus/esp-idf-bindgen" }

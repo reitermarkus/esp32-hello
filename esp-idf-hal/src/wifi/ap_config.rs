@@ -2,7 +2,7 @@ use core::fmt;
 
 use esp_idf_bindgen::{wifi_config_t, wifi_ap_config_t};
 
-use super::{AuthMode, Ssid, Password};
+use super::{AuthMode, Cipher, Ssid, Password};
 
 /// Configuration for an access point.
 #[derive(Clone)]
@@ -14,6 +14,7 @@ pub struct ApConfig {
   max_connection: u8,
   ssid_hidden: bool,
   beacon_interval: u16,
+  pairwise_cipher: Cipher,
 }
 
 impl fmt::Debug for ApConfig {
@@ -26,6 +27,7 @@ impl fmt::Debug for ApConfig {
       .field("max_connection", &self.max_connection)
       .field("ssid_hidden", &self.ssid_hidden)
       .field("beacon_interval", &self.beacon_interval)
+      .field("pairwise_cipher", &self.pairwise_cipher)
       .finish()
   }
 }
@@ -56,6 +58,7 @@ impl From<&ApConfig> for wifi_config_t {
         ssid_hidden: ap_config.ssid_hidden as u8,
         max_connection: ap_config.max_connection,
         beacon_interval: ap_config.beacon_interval,
+        pairwise_cipher: ap_config.pairwise_cipher.into(),
       },
     }
   }
@@ -70,6 +73,7 @@ pub struct ApConfigBuilder {
   max_connection: u8,
   ssid_hidden: bool,
   beacon_interval: u16,
+  pairwise_cipher: Cipher,
 }
 
 impl fmt::Debug for ApConfigBuilder {
@@ -82,6 +86,7 @@ impl fmt::Debug for ApConfigBuilder {
       .field("max_connection", &self.max_connection)
       .field("ssid_hidden", &self.ssid_hidden)
       .field("beacon_interval", &self.beacon_interval)
+      .field("pairwise_cipher", &self.pairwise_cipher)
       .finish()
   }
 }
@@ -96,6 +101,7 @@ impl Default for ApConfigBuilder {
       max_connection: 4,
       ssid_hidden: false,
       beacon_interval: 100,
+      pairwise_cipher: Cipher::None,
     }
   }
 }
@@ -120,6 +126,7 @@ impl ApConfigBuilder {
       max_connection: self.max_connection,
       ssid_hidden: self.ssid_hidden,
       beacon_interval: self.beacon_interval,
+      pairwise_cipher: self.pairwise_cipher,
     }
   }
 }

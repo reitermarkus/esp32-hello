@@ -124,6 +124,7 @@ impl From<&StaConfig> for wifi_config_t {
           capable: false,
           required: false,
         },
+        _bitfield_1: wifi_sta_config_t::new_bitfield_1(0, 0, 0),
       }
     }
   }

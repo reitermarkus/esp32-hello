@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Workaround until https://github.com/espressif/esp-idf/pull/6587 is merged.
+export ZSH_VERSION=''
+
 set -euo pipefail
 
 cd "$(dirname "${0}")"

@@ -224,7 +224,7 @@ pub enum AuthMode {
   #[cfg(target_device = "esp32")]
   Wpa3Psk,
   Wpa2Enterprise,
-  Max,
+  WapiPsk,
 }
 
 impl From<wifi_auth_mode_t> for AuthMode {
@@ -240,7 +240,8 @@ impl From<wifi_auth_mode_t> for AuthMode {
       #[cfg(target_device = "esp32")]
       wifi_auth_mode_t::WIFI_AUTH_WPA3_PSK => AuthMode::Wpa3Psk,
       wifi_auth_mode_t::WIFI_AUTH_WPA2_ENTERPRISE => AuthMode::Wpa2Enterprise,
-      wifi_auth_mode_t::WIFI_AUTH_MAX => AuthMode::Max,
+      wifi_auth_mode_t::WIFI_AUTH_WAPI_PSK => AuthMode::WapiPsk,
+      wifi_auth_mode_t::WIFI_AUTH_MAX => unreachable!("WIFI_AUTH_MAX"),
     }
   }
 }
@@ -258,7 +259,37 @@ impl From<AuthMode> for wifi_auth_mode_t {
       #[cfg(target_device = "esp32")]
       AuthMode::Wpa3Psk => wifi_auth_mode_t::WIFI_AUTH_WPA3_PSK,
       AuthMode::Wpa2Enterprise => wifi_auth_mode_t::WIFI_AUTH_WPA2_ENTERPRISE,
-      AuthMode::Max => wifi_auth_mode_t::WIFI_AUTH_MAX,
+      AuthMode::WapiPsk => wifi_auth_mode_t::WIFI_AUTH_WAPI_PSK,
+    }
+  }
+}
+
+/// A WiFi cipher type.
+#[derive(Debug, Clone, Copy)]
+pub enum Cipher {
+  None,
+  Wep40,      /// WEP40
+  Wep104,     /// WEP104
+  Tkip,       /// TKIP
+  Ccmp,       /// CCMP
+  TkipCcmp,   /// TKIP and CCMP
+  AesCmac128, /// AES-CMAC-128
+  Sms4,       /// SMS4
+  Unknown,
+}
+
+impl From<Cipher> for wifi_cipher_type_t {
+  fn from(cipher: Cipher) -> Self {
+    match cipher {
+      Cipher::None         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_NONE,
+      Cipher::Wep40        => wifi_cipher_type_t::WIFI_CIPHER_TYPE_WEP40,
+      Cipher::Wep104       => wifi_cipher_type_t::WIFI_CIPHER_TYPE_WEP104,
+      Cipher::Tkip         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_TKIP,
+      Cipher::Ccmp         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_CCMP,
+      Cipher::TkipCcmp     => wifi_cipher_type_t::WIFI_CIPHER_TYPE_TKIP_CCMP,
+      Cipher::AesCmac128   => wifi_cipher_type_t::WIFI_CIPHER_TYPE_AES_CMAC128,
+      Cipher::Sms4         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_SMS4,
+      Cipher::Unknown      => wifi_cipher_type_t::WIFI_CIPHER_TYPE_UNKNOWN,
     }
   }
 }
@@ -417,7 +448,7 @@ impl Wifi {
     interface.init();
     let mut ap_config = wifi_config_t::from(&config);
     enter_ap_mode();
-    esp_ok!(esp_wifi_set_config(esp_interface_t::ESP_IF_WIFI_AP, &mut ap_config))?;
+    esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_AP, &mut ap_config))?;
     esp_ok!(esp_wifi_start())?;
     Ok(WifiRunning::Ap(Wifi { config, deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
   }
@@ -431,7 +462,7 @@ impl Wifi {
 
     enter_sta_mode();
 
-    let state = if let Err(err) = esp_ok!(esp_wifi_set_config(esp_interface_t::ESP_IF_WIFI_STA, &mut sta_config)) {
+    let state = if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
       ConnectFutureState::Failed(err.into())
     } else {
       ConnectFutureState::Starting

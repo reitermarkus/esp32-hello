@@ -1,6 +1,6 @@
 [target.xtensa-esp32-none-elf]
 image = "reitermarkus/cross:xtensa-esp32-none-elf"
-env = { volumes = ["IDF_PATH",  "IDF_TOOLS_PATH", "__CARGO_TESTS_ONLY_SRC_ROOT"] }
+env = { passthrough = ["ZSH_VERSION"], volumes = ["IDF_PATH",  "IDF_TOOLS_PATH", "__CARGO_TESTS_ONLY_SRC_ROOT"] }
 xargo = false
 
 [target.xtensa-esp8266-none-elf]
