@@ -146,9 +146,7 @@ impl ScanFuture {
   pub(crate) fn new(config: &ScanConfig) -> Self {
     let mut state = Box::pin(ScanFutureState::Starting(ptr::null()));
 
-    enter_sta_mode();
-
-    if let Err(err) = esp_ok!(esp_wifi_start()) {
+    if let Err(err) = enter_sta_mode().and_then(|_| esp_ok!(esp_wifi_start())) {
       return Self { state: Box::pin(ScanFutureState::Failed(err.into())) };
     }
 
@@ -228,12 +226,12 @@ impl Future for ScanFuture {
       ScanFutureState::Done => {
         let unregister = unregister_scan_done_handler();
         let aps = get_ap_records();
-        leave_sta_mode();
+        let leave = leave_sta_mode();
 
         unregister?;
-        let aps = aps?;
+        leave?;
 
-        Poll::Ready(Ok(aps))
+        Poll::Ready(Ok(aps?))
       }
     }
   }

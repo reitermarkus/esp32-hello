@@ -350,74 +350,74 @@ fn get_mode() -> Result<wifi_mode_t, EspError> {
   Ok(mode)
 }
 
-fn enter_ap_mode() {
+fn enter_ap_mode() -> Result<(), EspError> {
   if AP_COUNT.fetch_add(1, SeqCst) > 0 {
-    return
+    return Ok(())
   }
 
-  let current_mode = get_mode().expect("failed to get WiFi mode");
+  let current_mode = get_mode()?;
 
   let new_mode = match current_mode {
-    wifi_mode_t::WIFI_MODE_AP | wifi_mode_t::WIFI_MODE_APSTA => return,
+    wifi_mode_t::WIFI_MODE_AP | wifi_mode_t::WIFI_MODE_APSTA => return Ok(()),
     wifi_mode_t::WIFI_MODE_NULL => wifi_mode_t::WIFI_MODE_AP,
     wifi_mode_t::WIFI_MODE_STA => wifi_mode_t::WIFI_MODE_APSTA,
     _ => unreachable!(),
   };
 
-  esp_ok!(esp_wifi_set_mode(new_mode)).expect("failed to set WiFi mode");
+  esp_ok!(esp_wifi_set_mode(new_mode))
 }
 
-fn leave_ap_mode() {
+fn leave_ap_mode() -> Result<(), EspError> {
   if AP_COUNT.fetch_sub(1, SeqCst) != 1 {
-    return
+    return Ok(())
   }
 
-  let current_mode = get_mode().expect("failed to get WiFi mode");
+  let current_mode = get_mode()?;
 
   match current_mode {
     wifi_mode_t::WIFI_MODE_AP => {
-      esp_ok!(esp_wifi_stop()).expect("failed to stop WiFi");
+      esp_ok!(esp_wifi_stop())
     },
     wifi_mode_t::WIFI_MODE_APSTA => {
-      esp_ok!(esp_wifi_set_mode(wifi_mode_t::WIFI_MODE_STA)).expect("failed to set WiFi mode");
+      esp_ok!(esp_wifi_set_mode(wifi_mode_t::WIFI_MODE_STA))
     },
     _ => unreachable!(),
-  };
+  }
 }
 
-fn enter_sta_mode() {
+fn enter_sta_mode() -> Result<(), EspError> {
   if STA_COUNT.fetch_add(1, SeqCst) > 0 {
-    return
+    return Ok(())
   }
 
-  let current_mode = get_mode().expect("failed to get WiFi mode");
+  let current_mode = get_mode()?;
 
   let new_mode = match current_mode {
-    wifi_mode_t::WIFI_MODE_STA | wifi_mode_t::WIFI_MODE_APSTA => return,
+    wifi_mode_t::WIFI_MODE_STA | wifi_mode_t::WIFI_MODE_APSTA => return Ok(()),
     wifi_mode_t::WIFI_MODE_NULL => wifi_mode_t::WIFI_MODE_STA,
     wifi_mode_t::WIFI_MODE_AP => wifi_mode_t::WIFI_MODE_APSTA,
     _ => unreachable!(),
   };
 
-  esp_ok!(esp_wifi_set_mode(new_mode)).expect("failed to set WiFi mode");
+  esp_ok!(esp_wifi_set_mode(new_mode))
 }
 
-fn leave_sta_mode() {
+fn leave_sta_mode() -> Result<(), EspError> {
   if STA_COUNT.fetch_sub(1, SeqCst) != 1 {
-    return
+    return Ok(())
   }
 
-  let current_mode = get_mode().expect("failed to get WiFi mode");
+  let current_mode = get_mode()?;
 
   match current_mode {
     wifi_mode_t::WIFI_MODE_STA => {
-      esp_ok!(esp_wifi_stop()).expect("failed to stop WiFi");
+      esp_ok!(esp_wifi_stop())
     },
     wifi_mode_t::WIFI_MODE_APSTA => {
-      esp_ok!(esp_wifi_set_mode(wifi_mode_t::WIFI_MODE_AP)).expect("failed to set WiFi mode");
+      esp_ok!(esp_wifi_set_mode(wifi_mode_t::WIFI_MODE_AP))
     },
     _ => unreachable!(),
-  };
+  }
 }
 
 static WIFI_ACTIVE: AtomicBool = AtomicBool::new(false);
