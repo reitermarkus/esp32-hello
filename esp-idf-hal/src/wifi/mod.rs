@@ -447,9 +447,14 @@ impl Wifi {
     let interface = Interface::Ap;
     interface.init();
     let mut ap_config = wifi_config_t::from(&config);
-    enter_ap_mode();
-    esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_AP, &mut ap_config))?;
-    esp_ok!(esp_wifi_start())?;
+
+    enter_ap_mode()?;
+    if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_AP, &mut ap_config)).and_then(|_| {
+      esp_ok!(esp_wifi_start())
+    }) {
+      let _ = leave_ap_mode()?;
+      return Err(err.into());
+    }
     Ok(WifiRunning::Ap(Wifi { config, deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
   }
 
@@ -458,17 +463,22 @@ impl Wifi {
     self.deinit_on_drop = false;
 
     Interface::Sta.init();
-    let mut sta_config = wifi_config_t::from(&config);
 
-    enter_sta_mode();
+    let state = if let Err(err) = enter_sta_mode().and_then(|_| {
+      let mut sta_config = wifi_config_t::from(&config);
+      if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
+        let _ = leave_sta_mode();
+        return Err(err);
+      }
 
-    let state = if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
+      Ok(())
+    }) {
       ConnectFutureState::Failed(err.into())
     } else {
       ConnectFutureState::Starting
     };
 
-    ConnectFuture { config, state }
+    ConnectFuture { wifi: Some(self), config: Some(config), state }
   }
 }
 
@@ -532,7 +542,7 @@ impl Wifi<StaConfig> {
   /// Stop a running WiFi in station mode.
   pub fn stop(mut self) -> (StaConfig, Wifi) {
     self.deinit_on_drop = false;
-    leave_sta_mode();
+    let _ = leave_sta_mode();
     let config = MaybeUninit::uninit();
     let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
     (config, Wifi { config: (), deinit_on_drop: true, ip_info: None })
@@ -547,7 +557,7 @@ impl Wifi<ApConfig> {
   /// Stop a running WiFi access point.
   pub fn stop(mut self) -> (ApConfig, Wifi) {
     self.deinit_on_drop = false;
-    leave_ap_mode();
+    let _ = leave_ap_mode();
     let config = MaybeUninit::uninit();
     let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
     (config, Wifi { config: (), deinit_on_drop: true, ip_info: None })
@@ -566,7 +576,8 @@ enum ConnectFutureState {
 #[must_use = "futures do nothing unless polled"]
 #[derive(Debug)]
 pub struct ConnectFuture {
-  config: StaConfig,
+  wifi: Option<Wifi>,
+  config: Option<StaConfig>,
   state: ConnectFutureState,
 }
 
@@ -586,37 +597,49 @@ impl fmt::Display for ConnectionError {
 
 /// The error type for operations on a [`Wifi`](struct.Wifi.html) instance.
 #[derive(Debug, Clone)]
-pub enum WifiError {
+pub enum WifiError<T = ()> {
   /// An internal error not directly related to WiFi.
-  Internal(EspError),
+  Internal(T, EspError),
   /// A connection error returned when a [`ConnectFuture`](struct.ConnectFuture.html) fails.
-  ConnectionError(ConnectionError),
+  ConnectionError(T, ConnectionError),
 }
 
-impl WifiError {
+impl WifiError<()> {
+  pub(crate) fn with_wifi<W>(self, wifi: W) -> WifiError<W> {
+    match self {
+      Self::Internal(_, esp_error) => WifiError::Internal(wifi, esp_error),
+      Self::ConnectionError(_, error) => WifiError::ConnectionError(wifi, error),
+    }
+  }
+}
+
+impl<T> WifiError<Wifi<T>> {
   /// Create a new uninitialized [`Wifi`](struct.Wifi.html) instance.
-  pub fn wifi(self) -> Wifi {
-    Wifi { config: (), deinit_on_drop: true, ip_info: None }
+  pub fn wifi(self) -> Wifi<T> {
+    match self {
+      Self::Internal(wifi, _) => wifi,
+      Self::ConnectionError(wifi, _) => wifi,
+    }
   }
 }
 
-impl From<EspError> for WifiError {
+impl From<EspError> for WifiError<()> {
   fn from(esp_error: EspError) -> Self {
-    Self::Internal(esp_error)
+    Self::Internal((), esp_error)
   }
 }
 
-impl fmt::Display for WifiError {
+impl<T> fmt::Display for WifiError<T> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
-      Self::Internal(esp_error) => esp_error.fmt(f),
-      Self::ConnectionError(error) => error.fmt(f),
+      Self::Internal(_, esp_error) => esp_error.fmt(f),
+      Self::ConnectionError(_, error) => error.fmt(f),
     }
   }
 }
 
 impl core::future::Future for ConnectFuture {
-  type Output = Result<WifiRunning, WifiError>;
+  type Output = Result<WifiRunning, WifiError<Wifi>>;
 
   #[cfg(target_device = "esp8266")]
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -660,15 +683,20 @@ impl core::future::Future for ConnectFuture {
         if let Err(err) = register_sta_handlers(b) {
           let _ = unregister_sta_handlers();
           drop(unsafe { Box::from_raw(b) });
-          return Poll::Ready(Err(err.into()));
+          let _ = leave_sta_mode();
+          return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
         }
 
-        esp_ok!(esp_wifi_start())?;
+        if let Err(err) = esp_ok!(esp_wifi_start()) {
+          let _ = leave_sta_mode();
+          return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
+        }
+
         Poll::Pending
       },
       ConnectFutureState::ConnectedWithoutIp { .. } => {
         Poll::Pending
-      }
+      },
       _ => {
         if let Err(err) = unregister_sta_handlers() {
           if !matches!(self.state, ConnectFutureState::Failed(..)) {
@@ -679,12 +707,12 @@ impl core::future::Future for ConnectFuture {
         match self.state {
           ConnectFutureState::Starting | ConnectFutureState::ConnectedWithoutIp { .. } => unreachable!(),
           ConnectFutureState::Failed(ref err) => {
-            leave_sta_mode();
-            Poll::Ready(Err(err.clone().into()))
+            let _ = leave_sta_mode();
+            return Poll::Ready(Err(WifiError::from(err.clone()).with_wifi(self.wifi.take().unwrap())));
           },
           ConnectFutureState::Connected { ref mut ip_info, .. } => {
             let ip_info = mem::replace(ip_info, unsafe { MaybeUninit::uninit().assume_init() });
-            let config = mem::replace(&mut self.as_mut().config, unsafe { MaybeUninit::uninit().assume_init() });
+            let config = self.as_mut().config.take().unwrap();
             Poll::Ready(Ok(WifiRunning::Sta(Wifi { config, deinit_on_drop: true, ip_info: Some(ip_info) })))
           }
         }
@@ -742,7 +770,7 @@ extern "C" fn wifi_sta_handler(
         };
 
         let (mut f, waker) = unsafe { *Box::from_raw(event_handler_arg as *mut (Pin<&mut ConnectFuture>, &Waker)) };
-        f.state = ConnectFutureState::Failed(WifiError::ConnectionError(error));
+        f.state = ConnectFutureState::Failed(WifiError::ConnectionError((), error));
 
         eprintln!("EVENT_STATE: {:?}", f.state);
 

@@ -219,9 +219,9 @@ impl Future for ScanFuture {
         *waker = cx.waker() as *const _;
         Poll::Pending
       },
-      ScanFutureState::Failed(ref mut err) => {
-        leave_sta_mode();
-        Poll::Ready(Err(mem::replace(err, unsafe { MaybeUninit::uninit().assume_init() })))
+      ScanFutureState::Failed(err) => {
+        let _ = leave_sta_mode();
+        Poll::Ready(Err(err.clone()))
       },
       ScanFutureState::Done => {
         let unregister = unregister_scan_done_handler();
