@@ -38,6 +38,7 @@ pub fn handle_request(socket: &UdpSocket, src: SocketAddr, request: Message, ip:
             rdata: &ip.octets(),
           };
 
+          response.add_question(&question);
           response.add_answer(&answer);
         } else {
           response.header_mut().set_response_code(ResponseCode::NonExistentDomain);

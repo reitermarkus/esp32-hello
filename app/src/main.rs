@@ -58,7 +58,7 @@ async fn rust_blink_and_write() -> Result<!, EspError> {
 
     thread::Builder::new()
       .name("dns_thread".into())
-      .stack_size(6144)
+      .stack_size(8192)
       .spawn(dns::server)
       .unwrap();
 
