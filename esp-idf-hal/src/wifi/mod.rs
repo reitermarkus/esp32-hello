@@ -109,6 +109,8 @@ impl Ssid {
     Ok(unsafe { Self::from_bytes_unchecked(bytes) })
   }
 
+  /// SAFTEY: The caller has to ensure that `bytes` does not contain a `NUL` byte and
+  ///         does not exceed 32 bytes.
   pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> Ssid {
     let ssid_len = bytes.len();
     let mut ssid = [0; SSID_MAX_LEN];
@@ -170,6 +172,8 @@ impl Password {
     Ok(unsafe { Self::from_bytes_unchecked(bytes) })
   }
 
+  /// SAFTEY: The caller has to ensure that `bytes` does not contain a `NUL` byte and
+  ///         does not exceed 64 bytes.
   pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> Password {
     let password_len = bytes.len();
     let mut password = [0; PASSWORD_MAX_LEN];
@@ -298,6 +302,7 @@ impl From<Cipher> for wifi_cipher_type_t {
 #[must_use = "WiFi will be stopped and deinitialized immediately. Drop it explicitly after you are done using it or create a named binding."]
 #[derive(Debug)]
 pub struct Wifi<T = ()> {
+  sta_mode: Option<StaMode>,
   config: T,
   deinit_on_drop: bool,
   ip_info: Option<IpInfo>,
@@ -385,6 +390,28 @@ fn leave_ap_mode() -> Result<(), EspError> {
   }
 }
 
+#[derive(Debug)]
+struct StaMode;
+
+impl StaMode {
+  pub fn enter() -> Self {
+    enter_sta_mode().unwrap();
+    Self
+  }
+}
+
+impl Clone for StaMode {
+  fn clone(&self) -> Self {
+    Self::enter()
+  }
+}
+
+impl Drop for StaMode {
+  fn drop(&mut self) {
+    let _ = leave_sta_mode();
+  }
+}
+
 fn enter_sta_mode() -> Result<(), EspError> {
   if STA_COUNT.fetch_add(1, SeqCst) > 0 {
     return Ok(())
@@ -436,7 +463,7 @@ impl Wifi {
       let config = wifi_init_config_t::default();
       esp_ok!(esp_wifi_init(&config)).expect("failed to initialize WiFi with default configuration");
 
-      Some(Wifi { config: (), deinit_on_drop: true, ip_info: None })
+      Some(Wifi { sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
     }
   }
 
@@ -455,7 +482,7 @@ impl Wifi {
       let _ = leave_ap_mode()?;
       return Err(err.into());
     }
-    Ok(WifiRunning::Ap(Wifi { config, deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
+    Ok(WifiRunning::Ap(Wifi { sta_mode: None, config, deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
   }
 
   /// Connect to a WiFi network using the specified [`StaConfig`](struct.StaConfig.html).
@@ -464,21 +491,16 @@ impl Wifi {
 
     Interface::Sta.init();
 
-    let state = if let Err(err) = enter_sta_mode().and_then(|_| {
-      let mut sta_config = wifi_config_t::from(&config);
-      if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
-        let _ = leave_sta_mode();
-        return Err(err);
-      }
+    let sta_mode = StaMode::enter();
 
-      Ok(())
-    }) {
-      ConnectFutureState::Failed(err.into())
+    let mut sta_config = wifi_config_t::from(&config);
+    let state = if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
+        ConnectFutureState::Failed(err.into())
     } else {
       ConnectFutureState::Starting
     };
 
-    ConnectFuture { wifi: Some(self), config: Some(config), state }
+    ConnectFuture { wifi: Some(self), config: Some(config), sta_mode, state }
   }
 }
 
@@ -542,10 +564,9 @@ impl Wifi<StaConfig> {
   /// Stop a running WiFi in station mode.
   pub fn stop(mut self) -> (StaConfig, Wifi) {
     self.deinit_on_drop = false;
-    let _ = leave_sta_mode();
     let config = MaybeUninit::uninit();
     let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
-    (config, Wifi { config: (), deinit_on_drop: true, ip_info: None })
+    (config, Wifi { sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
   }
 }
 
@@ -560,7 +581,7 @@ impl Wifi<ApConfig> {
     let _ = leave_ap_mode();
     let config = MaybeUninit::uninit();
     let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
-    (config, Wifi { config: (), deinit_on_drop: true, ip_info: None })
+    (config, Wifi { sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
   }
 }
 
@@ -569,7 +590,7 @@ enum ConnectFutureState {
   Failed(WifiError),
   Starting,
   ConnectedWithoutIp { ssid: Ssid, bssid: MacAddr6, channel: u8, auth_mode: AuthMode },
-  Connected { ip_info: IpInfo, ssid: Ssid, bssid: MacAddr6, channel: u8, auth_mode: AuthMode },
+  Connected { ip_info: Option<IpInfo>, ssid: Ssid, bssid: MacAddr6, channel: u8, auth_mode: AuthMode },
 }
 
 /// A future representing an ongoing connection to an access point.
@@ -578,6 +599,7 @@ enum ConnectFutureState {
 pub struct ConnectFuture {
   wifi: Option<Wifi>,
   config: Option<StaConfig>,
+  sta_mode: StaMode,
   state: ConnectFutureState,
 }
 
@@ -683,12 +705,10 @@ impl core::future::Future for ConnectFuture {
         if let Err(err) = register_sta_handlers(b) {
           let _ = unregister_sta_handlers();
           drop(unsafe { Box::from_raw(b) });
-          let _ = leave_sta_mode();
           return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
         }
 
         if let Err(err) = esp_ok!(esp_wifi_start()) {
-          let _ = leave_sta_mode();
           return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
         }
 
@@ -707,13 +727,12 @@ impl core::future::Future for ConnectFuture {
         match self.state {
           ConnectFutureState::Starting | ConnectFutureState::ConnectedWithoutIp { .. } => unreachable!(),
           ConnectFutureState::Failed(ref err) => {
-            let _ = leave_sta_mode();
             return Poll::Ready(Err(WifiError::from(err.clone()).with_wifi(self.wifi.take().unwrap())));
           },
           ConnectFutureState::Connected { ref mut ip_info, .. } => {
-            let ip_info = mem::replace(ip_info, unsafe { MaybeUninit::uninit().assume_init() });
+            let ip_info = ip_info.take();
             let config = self.as_mut().config.take().unwrap();
-            Poll::Ready(Ok(WifiRunning::Sta(Wifi { config, deinit_on_drop: true, ip_info: Some(ip_info) })))
+            Poll::Ready(Ok(WifiRunning::Sta(Wifi { sta_mode: Some(self.sta_mode.clone()), config, deinit_on_drop: true, ip_info })))
           }
         }
       }
@@ -794,7 +813,7 @@ extern "C" fn wifi_sta_handler(
         let (mut f, waker) = unsafe { *Box::from_raw(event_handler_arg as *mut (Pin<&mut ConnectFuture>, &Waker)) };
 
         if let ConnectFutureState::ConnectedWithoutIp { ssid, bssid, channel, auth_mode } = mem::replace(&mut f.state, ConnectFutureState::Starting) {
-          f.state = ConnectFutureState::Connected { ip_info, ssid, bssid, channel, auth_mode };
+          f.state = ConnectFutureState::Connected { ip_info: Some(ip_info), ssid, bssid, channel, auth_mode };
         } else {
           unreachable!();
         }

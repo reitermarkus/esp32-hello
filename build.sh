@@ -112,7 +112,7 @@ if esptool --no-stub --after no_reset verify_flash "${BOOTLOADER_OFFSET}" "${BOO
 else
   echo 'Flashing new bootloader …'
   esptool --after no_reset write_flash "${FLASH_ARGS[@]}" \
-    "${BOOTLOADER_OFFSET}" "target/${TARGET}/esp-build/bootloader/bootloader.bin"
+    "${BOOTLOADER_OFFSET}" "${BOOTLOADER_BINARY}"
 fi
 
 echo "Verifying partition table …"

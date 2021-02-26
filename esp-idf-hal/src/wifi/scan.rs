@@ -129,7 +129,7 @@ impl ApRecord {
 
 #[derive(Debug)]
 enum ScanFutureState {
-  Starting(*const Waker),
+  Starting(wifi_scan_config_t, StaMode, Option<Waker>),
   Failed(WifiError),
   Done,
 }
@@ -138,18 +138,12 @@ enum ScanFutureState {
 #[must_use = "futures do nothing unless polled"]
 #[derive(Debug)]
 pub struct ScanFuture {
-  state: Pin<Box<ScanFutureState>>,
+  state: ScanFutureState,
 }
 
 impl ScanFuture {
   #[inline]
   pub(crate) fn new(config: &ScanConfig) -> Self {
-    let mut state = Box::pin(ScanFutureState::Starting(ptr::null()));
-
-    if let Err(err) = enter_sta_mode().and_then(|_| esp_ok!(esp_wifi_start())) {
-      return Self { state: Box::pin(ScanFutureState::Failed(err.into())) };
-    }
-
     let duration_as_millis_rounded = |dur: Duration| {
       let nanos = dur.as_nanos();
 
@@ -191,16 +185,7 @@ impl ScanFuture {
       scan_time,
     };
 
-    if let Err(err) = register_scan_done_handler((&mut *state) as *mut _) {
-      return Self { state: Box::pin(ScanFutureState::Failed(err.into())) };
-    };
-
-    if let Err(err) = esp_ok!(esp_wifi_scan_start(&config, false)) {
-      let _ = unregister_scan_done_handler();
-      return Self { state: Box::pin(ScanFutureState::Failed(err.into())) };
-    };
-
-    Self { state }
+    Self { state: ScanFutureState::Starting(config, StaMode::enter(), None) }
   }
 }
 
@@ -214,24 +199,28 @@ impl Future for ScanFuture {
 
   #[cfg(target_device = "esp32")]
   fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-    match &mut *self.state {
-      ScanFutureState::Starting(ref mut waker) => {
-        *waker = cx.waker() as *const _;
+    match self.state {
+      ScanFutureState::Starting(config, _, ref mut waker) => {
+        waker.replace(cx.waker().clone());
+
+        esp_ok!(esp_wifi_start())?;
+
+        register_scan_done_handler((&mut self.state) as *mut _)?;
+
+        if let Err(err) = esp_ok!(esp_wifi_scan_start(&config, false)) {
+          let _ = unregister_scan_done_handler();
+          return Poll::Ready(Err(err.into()))
+        };
+
         Poll::Pending
       },
-      ScanFutureState::Failed(err) => {
-        let _ = leave_sta_mode();
+      ScanFutureState::Failed(ref err) => {
+        let _ = unregister_scan_done_handler();
         Poll::Ready(Err(err.clone()))
       },
       ScanFutureState::Done => {
-        let unregister = unregister_scan_done_handler();
-        let aps = get_ap_records();
-        let leave = leave_sta_mode();
-
-        unregister?;
-        leave?;
-
-        Poll::Ready(Ok(aps?))
+        unregister_scan_done_handler()?;
+        Poll::Ready(Ok(get_ap_records()?))
       }
     }
   }
@@ -246,17 +235,21 @@ fn get_ap_records() -> Result<Vec<ApRecord>, EspError> {
   esp_ok!(esp_wifi_scan_get_ap_records(&mut ap_num as _, aps.as_mut_ptr() as *mut wifi_ap_record_t))?;
 
   Ok(aps.into_iter().map(|ap| {
+    // SAFETY: At this point we have asserted that `esp_wifi_scan_get_ap_records` returned `ESP_OK`.
     let ap = unsafe { ap.assume_init() };
 
-    let ssid_len = memchr::memchr(0, &ap.ssid).unwrap_or(ap.ssid.len());
-    let ssid = unsafe { Ssid::from_bytes_unchecked(&ap.ssid[..ssid_len]) };
+    // SAFETY: We made sure that the SSID does not contain a `NUL` byte and
+    //         `ap.ssid` is at most 32 bytes long.
+    let ssid = unsafe {
+      let ssid_len = memchr::memchr(0, &ap.ssid).unwrap_or(ap.ssid.len());
+      Ssid::from_bytes_unchecked(&ap.ssid[..ssid_len])
+    };
 
     let bssid = MacAddr6::from(ap.bssid);
 
     ApRecord { ssid, bssid }
   }).collect())
 }
-
 
 #[cfg(target_device = "esp8266")]
 fn register_scan_done_handler(b: *mut ScanFutureState) -> Result<(), EspError> {
@@ -296,10 +289,10 @@ extern "C" fn wifi_scan_done_handler(
   _event_id: i32,
   _event_data: *mut libc::c_void,
 ) {
+  // SAFETY: `wifi_scan_done_handler` is only registered while the `event_handler_arg` is
+  //         pointing to a `ScanFutureState` contained in a `Pin`.
   let state =  unsafe { &mut *(event_handler_arg as *mut ScanFutureState) };
-  if let ScanFutureState::Starting(waker) = mem::replace(state, ScanFutureState::Done) {
-    if let Some(waker) = unsafe { waker.as_ref() } {
-      waker.wake_by_ref();
-    }
+  if let ScanFutureState::Starting(_, _, Some(waker)) = mem::replace(state, ScanFutureState::Done) {
+    waker.wake();
   }
 }
