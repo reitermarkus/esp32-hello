@@ -1,13 +1,8 @@
-use core::mem::transmute;
-use std::str::{self, FromStr, Utf8Error};
-use std::ops::Deref;
-use std::cmp::{Eq, Ord, Ordering};
-use core::ptr;
-use std::mem::{self, MaybeUninit};
+use core::mem::{self, transmute, MaybeUninit};
+use std::str::Utf8Error;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::SeqCst};
 use core::task::{Poll, Context, Waker};
 use core::pin::Pin;
-use alloc::boxed::Box;
 
 use core::fmt;
 use macaddr::MacAddr6;
@@ -25,8 +20,11 @@ pub use ap_config::*;
 mod scan;
 pub use scan::*;
 
-const SSID_MAX_LEN: usize = 32;
-const PASSWORD_MAX_LEN: usize = 64;
+mod ssid;
+pub use ssid::Ssid;
+
+mod password;
+pub use password::Password;
 
 /// Error returned by [`Ssid::from_bytes`](struct.Ssid.html#method.from_bytes)
 /// and [`Password::from_bytes`](struct.Password.html#method.from_bytes).
@@ -47,171 +45,6 @@ impl fmt::Display for WifiConfigError {
       Self::TooLong(max, actual) => write!(f, "data provided is {} bytes long, but maximum is {} bytes", max, actual),
       Self::Utf8Error(utf8_error) => utf8_error.fmt(f),
     }
-  }
-}
-
-/// A WiFi SSID.
-#[derive(Clone)]
-pub struct Ssid {
-  ssid: [u8; SSID_MAX_LEN],
-  ssid_len: usize,
-}
-
-impl Deref for Ssid {
-  type Target = str;
-
-  fn deref(&self) -> &Self::Target {
-    self.as_str()
-  }
-}
-
-impl PartialEq for Ssid {
-  fn eq(&self, other: &Self) -> bool {
-    self.as_str() == other.as_str()
-  }
-}
-
-impl Eq for Ssid {}
-
-impl Ord for Ssid {
-  fn cmp(&self, other: &Self) -> Ordering {
-    self.as_str().cmp(&other.as_str())
-  }
-}
-
-impl PartialOrd for Ssid {
-  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-    Some(self.cmp(other))
-  }
-}
-
-impl Ssid {
-  #[inline]
-  pub fn as_str(&self) -> &str {
-    &unsafe { str::from_utf8_unchecked(&self.ssid[..self.ssid_len]) }
-  }
-
-  pub fn from_bytes(bytes: &[u8]) -> Result<Ssid, WifiConfigError> {
-    let ssid_len = bytes.len();
-
-    if ssid_len > SSID_MAX_LEN {
-      return Err(WifiConfigError::TooLong(SSID_MAX_LEN, ssid_len))
-    }
-
-    if let Err(utf8_error) = str::from_utf8(bytes) {
-      return Err(WifiConfigError::Utf8Error(utf8_error))
-    }
-
-    if let Some(pos) = memchr::memchr(0, bytes) {
-      return Err(WifiConfigError::InteriorNul(pos))
-    }
-
-    Ok(unsafe { Self::from_bytes_unchecked(bytes) })
-  }
-
-  /// SAFTEY: The caller has to ensure that `bytes` does not contain a `NUL` byte and
-  ///         does not exceed 32 bytes.
-  pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> Ssid {
-    let ssid_len = bytes.len();
-    let mut ssid = [0; SSID_MAX_LEN];
-    ptr::copy_nonoverlapping(bytes.as_ptr(), ssid.as_mut_ptr(), ssid_len);
-    Self { ssid, ssid_len }
-  }
-}
-
-impl FromStr for Ssid {
-  type Err = WifiConfigError;
-
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-    Self::from_bytes(s.as_bytes())
-  }
-}
-
-impl fmt::Debug for Ssid {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("Ssid")
-      .field("ssid", &self.as_str())
-      .field("ssid_len", &self.ssid_len)
-      .finish()
-  }
-}
-
-impl fmt::Display for Ssid {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    self.as_str().fmt(f)
-  }
-}
-
-/// A WiFi password.
-#[derive(Clone)]
-pub struct Password {
-  password: [u8; PASSWORD_MAX_LEN],
-  password_len: usize,
-}
-
-impl Password {
-  pub fn as_str(&self) -> &str {
-    &unsafe { str::from_utf8_unchecked(&self.password[..self.password_len]) }
-  }
-
-  pub fn from_bytes(bytes: &[u8]) -> Result<Password, WifiConfigError> {
-    let ssid_len = bytes.len();
-
-    if ssid_len > PASSWORD_MAX_LEN {
-      return Err(WifiConfigError::TooLong(PASSWORD_MAX_LEN, ssid_len))
-    }
-
-    if let Err(utf8_error) = str::from_utf8(bytes) {
-      return Err(WifiConfigError::Utf8Error(utf8_error))
-    }
-
-    if let Some(pos) = memchr::memchr(0, bytes) {
-      return Err(WifiConfigError::InteriorNul(pos))
-    }
-
-    Ok(unsafe { Self::from_bytes_unchecked(bytes) })
-  }
-
-  /// SAFTEY: The caller has to ensure that `bytes` does not contain a `NUL` byte and
-  ///         does not exceed 64 bytes.
-  pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> Password {
-    let password_len = bytes.len();
-    let mut password = [0; PASSWORD_MAX_LEN];
-    ptr::copy_nonoverlapping(bytes.as_ptr(), password.as_mut_ptr(), password_len);
-    Self { password, password_len }
-  }
-}
-
-impl Default for Password {
-  fn default() -> Self {
-    Self { password: [0; PASSWORD_MAX_LEN], password_len: 0 }
-  }
-}
-
-impl FromStr for Password {
-  type Err = WifiConfigError;
-
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-    Self::from_bytes(s.as_bytes())
-  }
-}
-
-impl fmt::Debug for Password {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("Password")
-      .field("password", &"********")
-      .field("password_len", &8)
-      .finish()
-  }
-}
-
-impl fmt::Display for Password {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    #[cfg(debug)]
-    return self.as_str().fmt(f);
-
-    #[cfg(not(debug))]
-    return "********".fmt(f);
   }
 }
 
@@ -302,6 +135,7 @@ impl From<Cipher> for wifi_cipher_type_t {
 #[must_use = "WiFi will be stopped and deinitialized immediately. Drop it explicitly after you are done using it or create a named binding."]
 #[derive(Debug)]
 pub struct Wifi<T = ()> {
+  ap_mode: Option<ApMode>,
   sta_mode: Option<StaMode>,
   config: T,
   deinit_on_drop: bool,
@@ -355,6 +189,22 @@ fn get_mode() -> Result<wifi_mode_t, EspError> {
   Ok(mode)
 }
 
+#[derive(Debug)]
+struct ApMode;
+
+impl ApMode {
+  pub fn enter() -> Self {
+    enter_ap_mode().unwrap();
+    Self
+  }
+}
+
+impl Drop for ApMode {
+  fn drop(&mut self) {
+    let _ = leave_ap_mode();
+  }
+}
+
 fn enter_ap_mode() -> Result<(), EspError> {
   if AP_COUNT.fetch_add(1, SeqCst) > 0 {
     return Ok(())
@@ -397,12 +247,6 @@ impl StaMode {
   pub fn enter() -> Self {
     enter_sta_mode().unwrap();
     Self
-  }
-}
-
-impl Clone for StaMode {
-  fn clone(&self) -> Self {
-    Self::enter()
   }
 }
 
@@ -463,7 +307,7 @@ impl Wifi {
       let config = wifi_init_config_t::default();
       esp_ok!(esp_wifi_init(&config)).expect("failed to initialize WiFi with default configuration");
 
-      Some(Wifi { sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
+      Some(Wifi { ap_mode: None, sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
     }
   }
 
@@ -475,14 +319,14 @@ impl Wifi {
     interface.init();
     let mut ap_config = wifi_config_t::from(&config);
 
-    enter_ap_mode()?;
+    let ap_mode = ApMode::enter();
+
     if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_AP, &mut ap_config)).and_then(|_| {
       esp_ok!(esp_wifi_start())
     }) {
-      let _ = leave_ap_mode()?;
       return Err(err.into());
     }
-    Ok(WifiRunning::Ap(Wifi { sta_mode: None, config, deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
+    Ok(WifiRunning::Ap(Wifi { ap_mode: Some(ap_mode), sta_mode: self.sta_mode.take(), config, deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
   }
 
   /// Connect to a WiFi network using the specified [`StaConfig`](struct.StaConfig.html).
@@ -491,7 +335,7 @@ impl Wifi {
 
     Interface::Sta.init();
 
-    let sta_mode = StaMode::enter();
+    self.sta_mode = Some(StaMode::enter());
 
     let mut sta_config = wifi_config_t::from(&config);
     let state = if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
@@ -500,7 +344,7 @@ impl Wifi {
       ConnectFutureState::Starting
     };
 
-    ConnectFuture { wifi: Some(self), config: Some(config), sta_mode, state }
+    ConnectFuture { waker: None, wifi: Some(self), config: Some(config), state, handlers: None }
   }
 }
 
@@ -566,7 +410,7 @@ impl Wifi<StaConfig> {
     self.deinit_on_drop = false;
     let config = MaybeUninit::uninit();
     let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
-    (config, Wifi { sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
+    (config, Wifi { ap_mode: self.ap_mode.take(), sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
   }
 }
 
@@ -578,10 +422,9 @@ impl Wifi<ApConfig> {
   /// Stop a running WiFi access point.
   pub fn stop(mut self) -> (ApConfig, Wifi) {
     self.deinit_on_drop = false;
-    let _ = leave_ap_mode();
     let config = MaybeUninit::uninit();
     let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
-    (config, Wifi { sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
+    (config, Wifi { ap_mode: None, sta_mode: self.sta_mode.take(), config: (), deinit_on_drop: true, ip_info: None })
   }
 }
 
@@ -597,10 +440,11 @@ enum ConnectFutureState {
 #[must_use = "futures do nothing unless polled"]
 #[derive(Debug)]
 pub struct ConnectFuture {
+  waker: Option<Waker>,
   wifi: Option<Wifi>,
   config: Option<StaConfig>,
-  sta_mode: StaMode,
   state: ConnectFutureState,
+  handlers: Option<[EventHandler; 4]>,
 }
 
 /// The error type returned when a [`ConnectFuture`](struct.ConnectFuture.html) fails.
@@ -670,42 +514,24 @@ impl core::future::Future for ConnectFuture {
 
   #[cfg(target_device = "esp32")]
   fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-    fn register_sta_handlers(b: *mut (Pin<&mut ConnectFuture>, &Waker)) -> Result<(), EspError> {
-      esp_ok!(esp_event_handler_register(
-        WIFI_EVENT, wifi_event_t::WIFI_EVENT_STA_START as _, Some(wifi_sta_handler), b as *mut _,
-      ))?;
-      esp_ok!(esp_event_handler_register(
-        WIFI_EVENT, wifi_event_t::WIFI_EVENT_STA_CONNECTED as _, Some(wifi_sta_handler), b as *mut _,
-      ))?;
-      esp_ok!(esp_event_handler_register(
-        WIFI_EVENT, wifi_event_t::WIFI_EVENT_STA_DISCONNECTED as _, Some(wifi_sta_handler), b as *mut _,
-      ))?;
-      esp_ok!(esp_event_handler_register(
-        IP_EVENT, ip_event_t::IP_EVENT_STA_GOT_IP as _, Some(wifi_sta_handler), b as *mut _,
-      ))
-    }
-
-    fn unregister_sta_handlers() -> Result<(), EspError> {
-      esp_ok!(esp_event_handler_unregister(
-        WIFI_EVENT, wifi_event_t::WIFI_EVENT_STA_START as _, Some(wifi_sta_handler),
-      )).and(esp_ok!(esp_event_handler_unregister(
-        WIFI_EVENT, wifi_event_t::WIFI_EVENT_STA_CONNECTED as _, Some(wifi_sta_handler),
-      ))).and(esp_ok!(esp_event_handler_unregister(
-        WIFI_EVENT, wifi_event_t::WIFI_EVENT_STA_DISCONNECTED as _, Some(wifi_sta_handler),
-      ))).and(esp_ok!(esp_event_handler_unregister(
-        IP_EVENT, ip_event_t::IP_EVENT_STA_GOT_IP as _, Some(wifi_sta_handler),
-      )))
-    }
-
-    match &self.state {
+    match self.state {
       ConnectFutureState::Starting => {
-        let b: Box<(Pin<&mut ConnectFuture>, &Waker)> = Box::new((self.as_mut(), cx.waker()));
-        let b = Box::into_raw(b);
+        self.waker.replace(cx.waker().clone());
 
-        if let Err(err) = register_sta_handlers(b) {
-          let _ = unregister_sta_handlers();
-          drop(unsafe { Box::from_raw(b) });
-          return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
+        let register_handlers = |arg: *mut ConnectFuture| -> Result<[EventHandler; 4], EspError> {
+          Ok([
+            EventHandler::register(unsafe { WIFI_EVENT }, wifi_event_t::WIFI_EVENT_STA_START as _, wifi_sta_handler, arg as _)?,
+            EventHandler::register(unsafe { WIFI_EVENT }, wifi_event_t::WIFI_EVENT_STA_CONNECTED as _, wifi_sta_handler, arg as _)?,
+            EventHandler::register(unsafe { WIFI_EVENT }, wifi_event_t::WIFI_EVENT_STA_DISCONNECTED as _, wifi_sta_handler, arg as _)?,
+            EventHandler::register(unsafe { IP_EVENT }, ip_event_t::IP_EVENT_STA_GOT_IP as _, wifi_sta_handler, arg as _)?,
+          ])
+        };
+
+        match register_handlers(&mut *self as *mut _) {
+          Ok(handlers) => { self.handlers.replace(handlers); },
+          Err(err) => {
+            return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
+          },
         }
 
         if let Err(err) = esp_ok!(esp_wifi_start()) {
@@ -714,28 +540,18 @@ impl core::future::Future for ConnectFuture {
 
         Poll::Pending
       },
+      ConnectFutureState::Failed(ref err) => {
+        return Poll::Ready(Err(WifiError::from(err.clone()).with_wifi(self.wifi.take().unwrap())));
+      },
       ConnectFutureState::ConnectedWithoutIp { .. } => {
         Poll::Pending
       },
-      _ => {
-        if let Err(err) = unregister_sta_handlers() {
-          if !matches!(self.state, ConnectFutureState::Failed(..)) {
-            self.state = ConnectFutureState::Failed(err.into())
-          }
-        }
-
-        match self.state {
-          ConnectFutureState::Starting | ConnectFutureState::ConnectedWithoutIp { .. } => unreachable!(),
-          ConnectFutureState::Failed(ref err) => {
-            return Poll::Ready(Err(WifiError::from(err.clone()).with_wifi(self.wifi.take().unwrap())));
-          },
-          ConnectFutureState::Connected { ref mut ip_info, .. } => {
-            let ip_info = ip_info.take();
-            let config = self.as_mut().config.take().unwrap();
-            Poll::Ready(Ok(WifiRunning::Sta(Wifi { sta_mode: Some(self.sta_mode.clone()), config, deinit_on_drop: true, ip_info })))
-          }
-        }
-      }
+      ConnectFutureState::Connected { ref mut ip_info, .. } => {
+        let ip_info = ip_info.take();
+        let config = self.config.take().unwrap();
+        let wifi = self.wifi.as_mut().unwrap();
+        Poll::Ready(Ok(WifiRunning::Sta(Wifi { ap_mode: wifi.ap_mode.take(), sta_mode: wifi.sta_mode.take(), config, deinit_on_drop: true, ip_info })))
+      },
     }
   }
 }
@@ -747,6 +563,10 @@ extern "C" fn wifi_sta_handler(
   event_id: i32,
   event_data: *mut libc::c_void,
 ) {
+  // SAFETY: `wifi_sta_handler` is only registered while the `event_handler_arg` is
+  //         pointing to a `ConnectFuture` contained in a `Pin`.
+  let mut f = unsafe { Pin::new_unchecked(&mut *(event_handler_arg as *mut ConnectFuture)) };
+
   if event_base == unsafe { WIFI_EVENT } {
     let event_id: wifi_event_t = unsafe { transmute(event_id) };
 
@@ -755,9 +575,8 @@ extern "C" fn wifi_sta_handler(
     match event_id {
       wifi_event_t::WIFI_EVENT_STA_START => {
         if let Err(err) = esp_ok!(esp_wifi_connect()) {
-          let (mut f, waker) = unsafe { *Box::from_raw(event_handler_arg as *mut (Pin<&mut ConnectFuture>, &Waker)) };
           f.state = ConnectFutureState::Failed(err.into());
-          waker.wake_by_ref();
+          f.waker.as_ref().map(|w| w.wake_by_ref());
         }
       },
       wifi_event_t::WIFI_EVENT_STA_CONNECTED => {
@@ -770,7 +589,6 @@ extern "C" fn wifi_sta_handler(
         let channel = event.channel;
         let auth_mode = AuthMode::from(event.authmode);
 
-        let (ref mut f, _) = unsafe { &mut *(event_handler_arg as *mut (Pin<&mut ConnectFuture>, &Waker)) };
         f.state = ConnectFutureState::ConnectedWithoutIp { ssid, bssid, channel, auth_mode };
 
         eprintln!("EVENT_STATE: {:?}", f.state);
@@ -788,12 +606,11 @@ extern "C" fn wifi_sta_handler(
           ssid, bssid, reason
         };
 
-        let (mut f, waker) = unsafe { *Box::from_raw(event_handler_arg as *mut (Pin<&mut ConnectFuture>, &Waker)) };
         f.state = ConnectFutureState::Failed(WifiError::ConnectionError((), error));
 
         eprintln!("EVENT_STATE: {:?}", f.state);
 
-        waker.wake_by_ref();
+        f.waker.as_ref().map(|w| w.wake_by_ref());
       },
       _ => (),
     }
@@ -810,8 +627,6 @@ extern "C" fn wifi_sta_handler(
 
         eprintln!("EVENT_DATA: {:?}", event);
 
-        let (mut f, waker) = unsafe { *Box::from_raw(event_handler_arg as *mut (Pin<&mut ConnectFuture>, &Waker)) };
-
         if let ConnectFutureState::ConnectedWithoutIp { ssid, bssid, channel, auth_mode } = mem::replace(&mut f.state, ConnectFutureState::Starting) {
           f.state = ConnectFutureState::Connected { ip_info: Some(ip_info), ssid, bssid, channel, auth_mode };
         } else {
@@ -820,9 +635,34 @@ extern "C" fn wifi_sta_handler(
 
         eprintln!("EVENT_STATE: {:?}", f.state);
 
-        waker.wake_by_ref();
+        f.waker.as_ref().map(|w| w.wake_by_ref());
       },
       _ => (),
     }
+  }
+}
+
+#[derive(Debug)]
+struct EventHandler {
+  base: esp_event_base_t,
+  id: i32,
+  handler: extern "C" fn(*mut libc::c_void, *const i8, i32, *mut libc::c_void),
+}
+
+impl EventHandler {
+  pub fn register(
+    base: esp_event_base_t,
+    id: i32,
+    handler: extern "C" fn(*mut libc::c_void, *const i8, i32, *mut libc::c_void),
+    arg: *mut libc::c_void
+  ) -> Result<Self, EspError> {
+    esp_ok!(esp_event_handler_register(base, id, Some(handler), arg))?;
+    Ok(Self { base, id, handler })
+  }
+}
+
+impl Drop for EventHandler {
+  fn drop(&mut self) {
+    let _ = esp_ok!(esp_event_handler_unregister(self.base, self.id, Some(self.handler)));
   }
 }
