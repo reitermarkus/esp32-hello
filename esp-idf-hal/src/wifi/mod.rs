@@ -6,6 +6,7 @@ use core::pin::Pin;
 
 use core::fmt;
 use macaddr::MacAddr6;
+use pin_project::pin_project;
 
 use crate::{EspError, nvs::NonVolatileStorage, interface::{Interface, IpInfo}};
 
@@ -364,6 +365,7 @@ enum ConnectFutureState {
 
 /// A future representing an ongoing connection to an access point.
 #[must_use = "futures do nothing unless polled"]
+#[pin_project]
 #[derive(Debug)]
 pub struct ConnectFuture {
   waker: Option<Waker>,

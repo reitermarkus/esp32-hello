@@ -17,6 +17,7 @@ use esp_idf_bindgen::{
   wifi_scan_type_t,
 };
 use macaddr::MacAddr6;
+use pin_project::pin_project;
 
 use super::*;
 
@@ -135,6 +136,7 @@ enum ScanFutureState {
 
 /// A future representing a scan of nearby WiFi networks.
 #[must_use = "futures do nothing unless polled"]
+#[pin_project]
 #[derive(Debug)]
 pub struct ScanFuture {
   handler: Option<EventHandler>,

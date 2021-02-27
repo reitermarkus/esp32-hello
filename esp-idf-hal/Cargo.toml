@@ -11,3 +11,4 @@ static_assertions = "1"
 macaddr = "1"
 memchr = "2"
 libc = { version = "0.2", default-features = false }
+pin-project = "1.0"
