@@ -26,6 +26,15 @@ pub use ssid::Ssid;
 mod password;
 pub use password::Password;
 
+mod event_handler;
+use event_handler::EventHandler;
+
+mod auth_mode;
+pub use auth_mode::AuthMode;
+
+mod cipher;
+pub use cipher::Cipher;
+
 /// Error returned by [`Ssid::from_bytes`](struct.Ssid.html#method.from_bytes)
 /// and [`Password::from_bytes`](struct.Password.html#method.from_bytes).
 #[derive(Debug)]
@@ -44,89 +53,6 @@ impl fmt::Display for WifiConfigError {
       Self::InteriorNul(pos) => write!(f, "data provided contains an interior nul byte at pos {}", pos),
       Self::TooLong(max, actual) => write!(f, "data provided is {} bytes long, but maximum is {} bytes", max, actual),
       Self::Utf8Error(utf8_error) => utf8_error.fmt(f),
-    }
-  }
-}
-
-/// A WiFi authentication mode.
-#[derive(Debug, Clone, Copy)]
-pub enum AuthMode {
-  Open,
-  Wep,
-  WpaPsk,
-  WpaWpa2Psk,
-  Wpa2Psk,
-  #[cfg(target_device = "esp32")]
-  Wpa2Wpa3Psk,
-  #[cfg(target_device = "esp32")]
-  Wpa3Psk,
-  Wpa2Enterprise,
-  WapiPsk,
-}
-
-impl From<wifi_auth_mode_t> for AuthMode {
-  fn from(auth_mode: wifi_auth_mode_t) -> Self {
-    match auth_mode {
-      wifi_auth_mode_t::WIFI_AUTH_OPEN => AuthMode::Open,
-      wifi_auth_mode_t::WIFI_AUTH_WEP => AuthMode::Wep,
-      wifi_auth_mode_t::WIFI_AUTH_WPA_PSK => AuthMode::WpaPsk,
-      wifi_auth_mode_t::WIFI_AUTH_WPA_WPA2_PSK => AuthMode::WpaWpa2Psk,
-      wifi_auth_mode_t::WIFI_AUTH_WPA2_PSK => AuthMode::Wpa2Psk,
-      #[cfg(target_device = "esp32")]
-      wifi_auth_mode_t::WIFI_AUTH_WPA2_WPA3_PSK => AuthMode::Wpa2Wpa3Psk,
-      #[cfg(target_device = "esp32")]
-      wifi_auth_mode_t::WIFI_AUTH_WPA3_PSK => AuthMode::Wpa3Psk,
-      wifi_auth_mode_t::WIFI_AUTH_WPA2_ENTERPRISE => AuthMode::Wpa2Enterprise,
-      wifi_auth_mode_t::WIFI_AUTH_WAPI_PSK => AuthMode::WapiPsk,
-      wifi_auth_mode_t::WIFI_AUTH_MAX => unreachable!("WIFI_AUTH_MAX"),
-    }
-  }
-}
-
-impl From<AuthMode> for wifi_auth_mode_t {
-  fn from(auth_mode: AuthMode) -> Self {
-    match auth_mode {
-      AuthMode::Open => wifi_auth_mode_t::WIFI_AUTH_OPEN,
-      AuthMode::Wep => wifi_auth_mode_t::WIFI_AUTH_WEP,
-      AuthMode::WpaPsk => wifi_auth_mode_t::WIFI_AUTH_WPA_PSK,
-      AuthMode::WpaWpa2Psk => wifi_auth_mode_t::WIFI_AUTH_WPA_WPA2_PSK,
-      AuthMode::Wpa2Psk => wifi_auth_mode_t::WIFI_AUTH_WPA2_PSK,
-      #[cfg(target_device = "esp32")]
-      AuthMode::Wpa2Wpa3Psk => wifi_auth_mode_t::WIFI_AUTH_WPA2_WPA3_PSK,
-      #[cfg(target_device = "esp32")]
-      AuthMode::Wpa3Psk => wifi_auth_mode_t::WIFI_AUTH_WPA3_PSK,
-      AuthMode::Wpa2Enterprise => wifi_auth_mode_t::WIFI_AUTH_WPA2_ENTERPRISE,
-      AuthMode::WapiPsk => wifi_auth_mode_t::WIFI_AUTH_WAPI_PSK,
-    }
-  }
-}
-
-/// A WiFi cipher type.
-#[derive(Debug, Clone, Copy)]
-pub enum Cipher {
-  None,
-  Wep40,      /// WEP40
-  Wep104,     /// WEP104
-  Tkip,       /// TKIP
-  Ccmp,       /// CCMP
-  TkipCcmp,   /// TKIP and CCMP
-  AesCmac128, /// AES-CMAC-128
-  Sms4,       /// SMS4
-  Unknown,
-}
-
-impl From<Cipher> for wifi_cipher_type_t {
-  fn from(cipher: Cipher) -> Self {
-    match cipher {
-      Cipher::None         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_NONE,
-      Cipher::Wep40        => wifi_cipher_type_t::WIFI_CIPHER_TYPE_WEP40,
-      Cipher::Wep104       => wifi_cipher_type_t::WIFI_CIPHER_TYPE_WEP104,
-      Cipher::Tkip         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_TKIP,
-      Cipher::Ccmp         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_CCMP,
-      Cipher::TkipCcmp     => wifi_cipher_type_t::WIFI_CIPHER_TYPE_TKIP_CCMP,
-      Cipher::AesCmac128   => wifi_cipher_type_t::WIFI_CIPHER_TYPE_AES_CMAC128,
-      Cipher::Sms4         => wifi_cipher_type_t::WIFI_CIPHER_TYPE_SMS4,
-      Cipher::Unknown      => wifi_cipher_type_t::WIFI_CIPHER_TYPE_UNKNOWN,
     }
   }
 }
@@ -335,7 +261,7 @@ impl Wifi {
 
     Interface::Sta.init();
 
-    self.sta_mode = Some(StaMode::enter());
+    let sta_mode = Some(StaMode::enter());
 
     let mut sta_config = wifi_config_t::from(&config);
     let state = if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
@@ -344,7 +270,7 @@ impl Wifi {
       ConnectFutureState::Starting
     };
 
-    ConnectFuture { waker: None, wifi: Some(self), config: Some(config), state, handlers: None }
+    ConnectFuture { waker: None, wifi: Some(self), config: Some(config), sta_mode, state, handlers: None }
   }
 }
 
@@ -443,6 +369,7 @@ pub struct ConnectFuture {
   waker: Option<Waker>,
   wifi: Option<Wifi>,
   config: Option<StaConfig>,
+  sta_mode: Option<StaMode>,
   state: ConnectFutureState,
   handlers: Option<[EventHandler; 4]>,
 }
@@ -550,7 +477,7 @@ impl core::future::Future for ConnectFuture {
         let ip_info = ip_info.take();
         let config = self.config.take().unwrap();
         let wifi = self.wifi.as_mut().unwrap();
-        Poll::Ready(Ok(WifiRunning::Sta(Wifi { ap_mode: wifi.ap_mode.take(), sta_mode: wifi.sta_mode.take(), config, deinit_on_drop: true, ip_info })))
+        Poll::Ready(Ok(WifiRunning::Sta(Wifi { ap_mode: wifi.ap_mode.take(), sta_mode: self.sta_mode.take(), config, deinit_on_drop: true, ip_info })))
       },
     }
   }
@@ -642,27 +569,3 @@ extern "C" fn wifi_sta_handler(
   }
 }
 
-#[derive(Debug)]
-struct EventHandler {
-  base: esp_event_base_t,
-  id: i32,
-  handler: extern "C" fn(*mut libc::c_void, *const i8, i32, *mut libc::c_void),
-}
-
-impl EventHandler {
-  pub fn register(
-    base: esp_event_base_t,
-    id: i32,
-    handler: extern "C" fn(*mut libc::c_void, *const i8, i32, *mut libc::c_void),
-    arg: *mut libc::c_void
-  ) -> Result<Self, EspError> {
-    esp_ok!(esp_event_handler_register(base, id, Some(handler), arg))?;
-    Ok(Self { base, id, handler })
-  }
-}
-
-impl Drop for EventHandler {
-  fn drop(&mut self) {
-    let _ = esp_ok!(esp_event_handler_unregister(self.base, self.id, Some(self.handler)));
-  }
-}
