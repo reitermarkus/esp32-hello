@@ -1,4 +1,4 @@
-use std::{env, error::Error, fs::{create_dir_all, remove_file, File}, io::stderr, os::unix::{fs::symlink, io::{FromRawFd, AsRawFd}}, path::PathBuf, process::Command};
+use std::{env, error::Error, fs::{create_dir_all, File}, io::stderr, os::unix::{io::{FromRawFd, AsRawFd}}, path::PathBuf, process::Command};
 
 use jobserver::Client;
 
@@ -15,17 +15,6 @@ fn main() -> Result<(), Box<dyn Error>> {
   let target_dir = PathBuf::from(env::var("CARGO_TARGET_DIR").expect("CARGO_TARGET_DIR is unset"));
 
   let idf_path = PathBuf::from(env::var("IDF_PATH").expect("IDF_PATH is unset"));
-  let idf_link = target_dir.join("esp-idf");
-
-  let create_idf_symlink = || symlink(&idf_path, &idf_link);
-  if let Ok(link_path) = idf_link.read_link() {
-    if link_path != idf_path {
-      remove_file(&idf_link)?;
-      create_idf_symlink()?;
-    }
-  } else {
-    create_idf_symlink()?;
-  }
 
   env::set_var("CC", "xtensa-esp32-elf-cc");
   env::set_var("CXX", "xtensa-esp32-elf-c++");
