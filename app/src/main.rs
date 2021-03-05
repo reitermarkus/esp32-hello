@@ -95,10 +95,16 @@ async fn rust_blink_and_write() -> Result<!, EspError> {
         let wifi_running;
 
         if let (Some(ssid), Some(password)) = (ssid, password) {
-          wifi_running = wifi_manager::connect_ssid_password(wifi, ap_config, ssid, password).await;
+          wifi_running = match wifi_manager::connect_ssid_password(wifi, ssid, password).await {
+            Ok(wifi) => wifi,
+            Err(err) => {
+              println!("Starting Access Point '{}' …", ap_config.ssid());
+              err.wifi().start_ap(ap_config).expect("Failed to start access point")
+            },
+          };
         } else {
           println!("Starting Access Point '{}' …", ap_config.ssid());
-          wifi_running = wifi.start_ap(ap_config).unwrap();
+          wifi_running = wifi.start_ap(ap_config).expect("Failed to start access point");
         }
 
         let stream = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 80)).expect("failed starting TCP listener");

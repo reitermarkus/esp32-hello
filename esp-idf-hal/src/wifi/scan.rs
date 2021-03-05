@@ -116,6 +116,7 @@ impl ScanConfigBuilder {
 pub struct ApRecord {
   ssid: Ssid,
   bssid: MacAddr6,
+  auth_mode: AuthMode,
 }
 
 impl ApRecord {
@@ -125,6 +126,10 @@ impl ApRecord {
 
   pub fn bssid(&self) -> &MacAddr6 {
     &self.bssid
+  }
+
+  pub fn auth_mode(&self) -> &AuthMode {
+    &self.auth_mode
   }
 }
 
@@ -245,8 +250,9 @@ fn get_ap_records() -> Result<Vec<ApRecord>, EspError> {
     };
 
     let bssid = MacAddr6::from(ap.bssid);
+    let auth_mode = ap.authmode.into();
 
-    ApRecord { ssid, bssid }
+    ApRecord { ssid, bssid, auth_mode }
   }).collect())
 }
 

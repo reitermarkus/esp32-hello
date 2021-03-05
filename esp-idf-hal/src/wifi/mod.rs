@@ -3,7 +3,6 @@ use std::str::Utf8Error;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::SeqCst};
 use core::task::{Poll, Context, Waker};
 use core::pin::Pin;
-use core::marker::PhantomData;
 
 use core::fmt;
 use macaddr::MacAddr6;
@@ -62,13 +61,14 @@ impl fmt::Display for WifiConfigError {
 #[derive(Debug)]
 pub struct Ap {
   mode: ApMode,
-  // config: ApConfig,
 }
 
 impl Ap {
-  // pub fn config(&self) -> &ApConfig {
-  //   &self.config
-  // }
+  pub fn config(&self) -> ApConfig {
+    let config = MaybeUninit::<ApConfig>::uninit();
+    esp_ok!(esp_wifi_get_config(wifi_interface_t::WIFI_IF_AP, config.as_ptr() as *mut _)).unwrap();
+    unsafe { config.assume_init() }
+  }
 
   pub fn ip_info(&self) -> IpInfo {
     Interface::Ap.ip_info()
@@ -78,13 +78,14 @@ impl Ap {
 #[derive(Debug)]
 pub struct Sta {
   mode: StaMode,
-  // config: StaConfig,
 }
 
 impl Sta {
-  // pub fn config(&self) -> &StaConfig {
-  //   &self.config
-  // }
+  pub fn config(&self) -> StaConfig {
+    let config = MaybeUninit::<StaConfig>::uninit();
+    esp_ok!(esp_wifi_get_config(wifi_interface_t::WIFI_IF_STA, config.as_ptr() as *mut _)).unwrap();
+    unsafe { config.assume_init() }
+  }
 
   pub fn ip_info(&self) -> IpInfo {
     Interface::Sta.ip_info()
@@ -93,21 +94,23 @@ impl Sta {
 
 #[derive(Debug)]
 enum WifiInner {
-  Off,
+  None,
   Ap(Ap),
   Sta(Sta),
   ApSta(Ap, Sta),
 }
 
+impl Default for WifiInner {
+  fn default() -> Self {
+    Self::None
+  }
+}
+
 /// An instance of the WiFi peripheral.
 #[must_use = "WiFi will be stopped and deinitialized immediately. Drop it explicitly after you are done using it or create a named binding."]
 #[derive(Debug)]
-pub struct Wifi<T = ()> {
-  ap_mode: Option<ApMode>,
-  sta_mode: Option<StaMode>,
-  config: Option<T>,
-  deinit_on_drop: bool,
-  ip_info: Option<IpInfo>,
+pub struct Wifi {
+  inner: WifiInner,
 }
 
 #[cfg(target_device = "esp8266")]
@@ -277,7 +280,6 @@ fn leave_sta_mode() -> Result<(), EspError> {
   get_mode()?;
 
   if new_mode == wifi_mode_t::WIFI_MODE_NULL {
-    // esp_ok!(esp_wifi_restore())?;
     esp_ok!(esp_wifi_stop())?;
   }
 
@@ -299,16 +301,15 @@ impl Wifi {
       NonVolatileStorage::init_default().expect("failed to initialize default NVS partition");
       let config = wifi_init_config_t::default();
       esp_ok!(esp_wifi_init(&config)).expect("failed to initialize WiFi with default configuration");
+      esp_ok!(esp_wifi_set_mode(wifi_mode_t::WIFI_MODE_NULL)).unwrap();
 
-      Some(Wifi { ap_mode: None, sta_mode: None, config: Some(()), deinit_on_drop: true, ip_info: None })
+      Some(Wifi { inner: WifiInner::None })
     }
   }
 
   /// Start an access point using the specified [`ApConfig`](struct.ApConfig.html).
-  pub fn start_ap(mut self, mut config: ApConfig) -> Result<WifiRunning, WifiError> {
+  pub fn start_ap(mut self, mut config: ApConfig) -> Result<Wifi, WifiError> {
     eprintln!("Starting AP");
-
-    self.deinit_on_drop = false;
 
     let interface = Interface::Ap;
     interface.init();
@@ -320,11 +321,18 @@ impl Wifi {
     }) {
       return Err(err.into());
     }
-    Ok(WifiRunning::Ap(Wifi { ap_mode: Some(ap_mode), sta_mode: self.sta_mode.take(), config: Some(config), deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
+
+    let inner = match mem::take(&mut self.inner) {
+      WifiInner::Sta(sta) => WifiInner::ApSta(Ap { mode: ap_mode }, sta),
+      _ => WifiInner::Ap(Ap { mode: ap_mode }),
+    };
+    self.inner = inner;
+
+    Ok(self)
   }
 
   /// Connect to a WiFi network using the specified [`StaConfig`](struct.StaConfig.html).
-  pub fn connect_sta(mut self, mut config: StaConfig) -> ConnectFuture {
+  pub fn connect_sta(self, mut config: StaConfig) -> ConnectFuture {
     eprintln!("Starting STA connection");
 
     Interface::Sta.init();
@@ -337,89 +345,73 @@ impl Wifi {
       ConnectFutureState::Starting
     };
 
-    ConnectFuture { waker: None, wifi: Some(self), config: Some(config), sta_mode, state, handlers: None }
+    ConnectFuture { waker: None, wifi: Some(self), mode: sta_mode, state, handlers: None }
   }
 }
 
-/// A running WiFi instance.
-#[must_use = "WiFi will be stopped and deinitialized immediately. Drop it explicitly after you are done using it or create a named binding."]
-#[derive(Debug)]
-pub enum WifiRunning {
-  Sta(Wifi<StaConfig>),
-  Ap(Wifi<ApConfig>),
-}
-
-impl WifiRunning {
-  pub fn scan(&mut self, scan_config: &ScanConfig) -> ScanFuture {
-    match self {
-      Self::Sta(wifi) => wifi.scan(scan_config),
-      Self::Ap(wifi) => wifi.scan(scan_config),
-    }
-  }
-
-  pub fn ip_info(&self) -> &IpInfo {
-    match self {
-      Self::Sta(wifi) => wifi.ip_info(),
-      Self::Ap(wifi) => wifi.ip_info(),
-    }
-  }
-}
-
-impl<T> Wifi<T> {
+impl Wifi {
   /// Scan nearby WiFi networks using the specified [`ScanConfig`](struct.ScanConfig.html).
   pub fn scan(&mut self, scan_config: &ScanConfig) -> ScanFuture {
     ScanFuture::new(scan_config)
   }
 
-  pub fn config(&self) -> &T {
-    self.config.as_ref().unwrap()
+  pub fn as_sta(&self) -> Option<&Sta> {
+    match &self.inner {
+      WifiInner::Sta(sta) => Some(sta),
+      WifiInner::ApSta(_, sta) => Some(sta),
+      _ => None,
+    }
   }
-}
 
-impl<T> Drop for Wifi<T> {
-  /// Stops a running WiFi instance and deinitializes it, making it available again
-  /// by calling [`Wifi::take()`](struct.Wifi.html#method.take).
-  fn drop(&mut self) {
-    if self.deinit_on_drop {
-      if mem::size_of::<T>() != 0 {
-        unsafe { esp_wifi_stop() };
-      }
-
-      let _ = esp_ok!(esp_wifi_deinit());
-      NonVolatileStorage::deinit_default();
-
-      WIFI_ACTIVE.store(false, SeqCst);
+  pub fn as_ap(&self) -> Option<&Ap> {
+    match &self.inner {
+      WifiInner::Ap(ap) => Some(ap),
+      WifiInner::ApSta(ap, _) => Some(ap),
+      _ => None,
     }
   }
 }
 
-impl Wifi<StaConfig> {
-  pub fn ip_info(&self) -> &IpInfo {
-    self.ip_info.as_ref().unwrap()
-  }
+impl Drop for Wifi {
+  /// Stops a running WiFi instance and deinitializes it, making it available again
+  /// by calling [`Wifi::take()`](struct.Wifi.html#method.take).
+  fn drop(&mut self) {
+    if !matches!(self.inner, WifiInner::None) {
+      unsafe { esp_wifi_stop() };
+    }
 
-  /// Stop a running WiFi in station mode.
-  pub fn stop(mut self) -> (StaConfig, Wifi) {
-    eprintln!("Stopping STA");
+    let _ = esp_ok!(esp_wifi_deinit());
+    NonVolatileStorage::deinit_default();
 
-    self.deinit_on_drop = false;
-    let config = self.config.take().unwrap();
-    (config, Wifi { ap_mode: self.ap_mode.take(), sta_mode: None, config: Some(()), deinit_on_drop: true, ip_info: None })
+    WIFI_ACTIVE.store(false, SeqCst);
   }
 }
 
-impl Wifi<ApConfig> {
-  pub fn ip_info(&self) -> &IpInfo {
-    self.ip_info.as_ref().unwrap()
+impl Wifi {
+  /// Stop a running WiFi in station mode.
+  pub fn stop_sta(mut self) -> Wifi {
+    eprintln!("Stopping STA");
+
+    let inner = match mem::take(&mut self.inner) {
+      WifiInner::ApSta(ap, sta) => WifiInner::Ap(ap),
+      _ => WifiInner::None,
+    };
+    self.inner = inner;
+
+     self
   }
 
   /// Stop a running WiFi access point.
-  pub fn stop(mut self) -> (ApConfig, Wifi) {
+  pub fn stop_ap(mut self) -> Wifi {
     eprintln!("Stopping AP");
 
-    self.deinit_on_drop = false;
-    let config = self.config.take().unwrap();
-    (config, Wifi { ap_mode: None, sta_mode: self.sta_mode.take(), config: Some(()), deinit_on_drop: true, ip_info: None })
+    let inner = match mem::take(&mut self.inner) {
+      WifiInner::ApSta(ap, sta) => WifiInner::Sta(sta),
+      _ => WifiInner::None,
+    };
+    self.inner = inner;
+
+    self
   }
 }
 
@@ -438,8 +430,7 @@ enum ConnectFutureState {
 pub struct ConnectFuture {
   waker: Option<Waker>,
   wifi: Option<Wifi>,
-  config: Option<StaConfig>,
-  sta_mode: Option<StaMode>,
+  mode: Option<StaMode>,
   state: ConnectFutureState,
   handlers: Option<[EventHandler; 4]>,
 }
@@ -476,9 +467,9 @@ impl WifiError<()> {
   }
 }
 
-impl<T> WifiError<Wifi<T>> {
+impl WifiError<Wifi> {
   /// Create a new uninitialized [`Wifi`](struct.Wifi.html) instance.
-  pub fn wifi(self) -> Wifi<T> {
+  pub fn wifi(self) -> Wifi {
     match self {
       Self::Internal(wifi, _) => wifi,
       Self::ConnectionError(wifi, _) => wifi,
@@ -502,7 +493,7 @@ impl<T> fmt::Display for WifiError<T> {
 }
 
 impl core::future::Future for ConnectFuture {
-  type Output = Result<WifiRunning, WifiError<Wifi>>;
+  type Output = Result<Wifi, WifiError<Wifi>>;
 
   #[cfg(target_device = "esp8266")]
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -547,10 +538,17 @@ impl core::future::Future for ConnectFuture {
         eprintln!("Ended STA connection");
 
         let ip_info = ip_info.take();
-        let config = self.config.take();
-        let mut wifi = self.wifi.as_mut().unwrap();
-        wifi.deinit_on_drop = false;
-        Poll::Ready(Ok(WifiRunning::Sta(Wifi { ap_mode: wifi.ap_mode.take(), sta_mode: self.sta_mode.take(), config, deinit_on_drop: true, ip_info })))
+        let mode = self.mode.take().unwrap();
+
+        let mut wifi = self.wifi.take().unwrap();
+
+        let inner = match mem::take(&mut wifi.inner) {
+          WifiInner::Ap(ap) => WifiInner::ApSta(ap, Sta { mode }),
+          _ => WifiInner::Sta(Sta { mode }),
+        };
+        wifi.inner = inner;
+
+        Poll::Ready(Ok(wifi))
       },
     }
   }

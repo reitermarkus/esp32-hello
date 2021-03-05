@@ -13,19 +13,34 @@
         font-size: 1em;
       }
 
-      input, label {
+      input, label, .error, .success {
         -webkit-appearance: none;
         box-sizing: border-box;
         font-size: 1em;
         padding: 0.75em 1em;
         margin: 0 0 .5em 0;
+      }
+
+      label {
         float: left;
       }
 
-      input {
+      input, .error, .success {
         outline: none;
         border: 1px solid rgba(0, 0, 0, 0.1);
         border-radius: 0.3em;
+      }
+
+      .error, .error a {
+        background-color: #ffeeee;
+        border-color: rgba(100, 0, 0, 0.1);
+        color: #d00;
+      }
+
+      .success, .success a {
+        background-color: #eeffee;
+        border-color: rgba(0, 100, 0, 0.1);
+        color: #0a0;
       }
 
       input::-webkit-calendar-picker-indicator {
@@ -80,24 +95,4 @@
         line-height: 0.5em;
       }
     </style>
-    <script type='text/javascript'>
-      function showPassword(checkbox) {
-        const x = document.getElementById('password')
-
-        if (checkbox.checked) {
-          x.type = 'text'
-        } else {
-          x.type = 'password'
-        }
-      }
-    </script>
-  </head>
   <body>
-    <form action='/connect' method='post'>
-      <input name='ssid' type='text' maxlength='32' placeholder='SSID' list='ssids'/>
-      <input id='password' name='password' type='password' maxlength='64' placeholder='Password'>
-      <input id='show-password' type='checkbox' onclick='showPassword(this)'> <label for='show-password'>Show Password</label>
-      <input type='submit' value='Connect'>
-    </form>
-  </body>
-</html>
