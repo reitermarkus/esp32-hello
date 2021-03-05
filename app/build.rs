@@ -16,9 +16,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   let idf_path = PathBuf::from(env::var("IDF_PATH").expect("IDF_PATH is unset"));
 
-  env::set_var("CC", "xtensa-esp32-elf-cc");
-  env::set_var("CXX", "xtensa-esp32-elf-c++");
-
   let esp_build_path = target_dir.join(target).join("esp-build");
   create_dir_all(&esp_build_path)?;
 
@@ -126,7 +123,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     "-L${ESP_BUILD}/tcpip_adapter",                "-ltcpip_adapter",
     "-L${ESP_BUILD}/vfs",                          "-lvfs",
     "-L${ESP_BUILD}/wpa_supplicant",               "-lwpa_supplicant",
-    "-L${ESP_BUILD}/xtensa",                       "-lxtensa",
     "-L${ESP_BUILD}/xtensa",                       "-lxtensa",
     "-L${IDF_PATH}/components/xtensa/esp32",       "-lxt_hal",
 

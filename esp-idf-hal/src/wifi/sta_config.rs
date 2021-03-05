@@ -1,4 +1,6 @@
 use core::fmt;
+use core::mem;
+use core::num::{NonZeroU8, NonZeroU16};
 
 use esp_idf_bindgen::{
   wifi_config_t,
@@ -80,53 +82,31 @@ impl From<ScanThreshold> for wifi_scan_threshold_t {
 }
 
 /// Configuration for a station.
-#[derive(Debug, Clone)]
-pub struct StaConfig {
-  ssid: Ssid,
-  password: Password,
-  scan_method: ScanMethod,
-  bssid: Option<[u8; 6]>,
-  channel: Option<u8>,
-  listen_interval: Option<u16>,
-  sort_method: SortMethod,
-  threshold: Option<ScanThreshold>,
+#[derive(Clone)]
+pub struct StaConfig(pub(crate) wifi_config_t);
+
+impl fmt::Debug for StaConfig {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("StaConfig")
+      .field("ssid", &self.ssid())
+      .field("password", &self.password())
+      .finish()
+  }
 }
 
 impl StaConfig {
+  #[inline]
   pub fn ssid(&self) -> &Ssid {
-    &self.ssid
+    unsafe { mem::transmute(&self.0.sta.ssid) }
   }
 
+  #[inline]
   pub fn password(&self) -> &Password {
-    &self.password
+    unsafe { mem::transmute(&self.0.sta.password) }
   }
 
   pub fn builder() -> StaConfigBuilder {
     StaConfigBuilder::default()
-  }
-}
-
-impl From<&StaConfig> for wifi_config_t {
-  fn from(sta_config: &StaConfig) -> Self {
-    Self {
-      sta: wifi_sta_config_t {
-        ssid: sta_config.ssid.ssid,
-        password: sta_config.password.password,
-        scan_method: sta_config.scan_method.into(),
-        bssid_set: sta_config.bssid.is_some(),
-        bssid: sta_config.bssid.unwrap_or([0, 0, 0, 0, 0, 0]),
-        channel: sta_config.channel.unwrap_or(0),
-        listen_interval: sta_config.listen_interval.unwrap_or(0),
-        sort_method: sta_config.sort_method.into(),
-        threshold: sta_config.threshold.unwrap_or_default().into(),
-        #[cfg(target_device = "esp32")]
-        pmf_cfg: esp_idf_bindgen::wifi_pmf_config_t {
-          capable: false,
-          required: false,
-        },
-        _bitfield_1: wifi_sta_config_t::new_bitfield_1(0, 0, 0),
-      }
-    }
   }
 }
 
@@ -136,8 +116,8 @@ pub struct StaConfigBuilder {
   password: Password,
   scan_method: ScanMethod,
   bssid: Option<[u8; 6]>,
-  channel: Option<u8>,
-  listen_interval: Option<u16>,
+  channel: Option<NonZeroU8>,
+  listen_interval: Option<NonZeroU16>,
   sort_method: SortMethod,
   threshold: Option<ScanThreshold>,
 }
@@ -184,15 +164,24 @@ impl StaConfigBuilder {
   }
 
   pub fn build(&self) -> StaConfig {
-    StaConfig {
-      ssid: self.ssid.clone().expect("missing SSID"),
-      password: self.password.clone(),
-      scan_method: self.scan_method,
-      bssid: self.bssid,
-      channel: self.channel,
-      listen_interval: self.listen_interval,
-      sort_method: self.sort_method,
-      threshold: self.threshold,
-    }
+    StaConfig(wifi_config_t {
+      sta: wifi_sta_config_t {
+        ssid: self.ssid.clone().expect("missing SSID").0,
+        password: self.password.clone().0,
+        scan_method: self.scan_method.into(),
+        bssid_set: self.bssid.is_some(),
+        bssid: self.bssid.unwrap_or([0, 0, 0, 0, 0, 0]),
+        channel: unsafe { mem::transmute(self.channel) },
+        listen_interval: unsafe { mem::transmute(self.listen_interval) },
+        sort_method: self.sort_method.into(),
+        threshold: self.threshold.unwrap_or_default().into(),
+        #[cfg(target_device = "esp32")]
+        pmf_cfg: esp_idf_bindgen::wifi_pmf_config_t {
+          capable: false,
+          required: false,
+        },
+        _bitfield_1: wifi_sta_config_t::new_bitfield_1(0, 0, 0),
+      }
+    })
   }
 }

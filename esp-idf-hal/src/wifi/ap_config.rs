@@ -1,4 +1,6 @@
 use core::fmt;
+use core::mem;
+use core::num::{NonZeroU8, NonZeroU16};
 
 use esp_idf_bindgen::{wifi_config_t, wifi_ap_config_t};
 
@@ -6,39 +8,55 @@ use super::{AuthMode, Cipher, Ssid, Password};
 
 /// Configuration for an access point.
 #[derive(Clone)]
-pub struct ApConfig {
-  ssid: Ssid,
-  password: Password,
-  channel: u8,
-  auth_mode: AuthMode,
-  max_connection: u8,
-  ssid_hidden: bool,
-  beacon_interval: u16,
-  pairwise_cipher: Cipher,
-}
+#[repr(transparent)]
+pub struct ApConfig(pub(crate) wifi_config_t);
 
 impl fmt::Debug for ApConfig {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("ApConfigBuilder")
-      .field("ssid", &self.ssid)
-      .field("password", &"********")
-      .field("channel", &self.channel)
-      .field("auth_mode", &self.auth_mode)
-      .field("max_connection", &self.max_connection)
-      .field("ssid_hidden", &self.ssid_hidden)
-      .field("beacon_interval", &self.beacon_interval)
-      .field("pairwise_cipher", &self.pairwise_cipher)
+      .field("ssid", &self.ssid())
+      .field("password", &self.password())
+      .field("channel", &self.channel())
+      .field("auth_mode", &self.auth_mode())
+      .field("max_connection", &self.max_connection())
+      .field("ssid_hidden", &self.ssid_hidden())
+      .field("beacon_interval", &self.beacon_interval())
+      .field("pairwise_cipher", &self.pairwise_cipher())
       .finish()
   }
 }
 
 impl ApConfig {
   pub fn ssid(&self) -> &Ssid {
-    &self.ssid
+    unsafe { mem::transmute(&self.0.ap.ssid) }
   }
 
   pub fn password(&self) -> &Password {
-    &self.password
+    unsafe { mem::transmute(&self.0.ap.password) }
+  }
+
+  pub fn channel(&self) -> Option<NonZeroU8> {
+    unsafe { mem::transmute(self.0.ap.channel) }
+  }
+
+  pub fn auth_mode(&self) -> AuthMode {
+    AuthMode::from(unsafe { self.0.ap.authmode })
+  }
+
+  pub fn max_connection(&self) -> Option<NonZeroU8> {
+    unsafe { mem::transmute(self.0.ap.max_connection) }
+  }
+
+  pub fn ssid_hidden(&self) -> bool {
+    unsafe { mem::transmute(self.0.ap.ssid_hidden) }
+  }
+
+  pub fn beacon_interval(&self) -> Option<NonZeroU16> {
+    unsafe { mem::transmute(self.0.ap.beacon_interval) }
+  }
+
+  pub fn pairwise_cipher(&self) -> Cipher {
+    Cipher::from(unsafe { self.0.ap.pairwise_cipher })
   }
 
   pub fn builder() -> ApConfigBuilder {
@@ -46,33 +64,15 @@ impl ApConfig {
   }
 }
 
-impl From<&ApConfig> for wifi_config_t {
-  fn from(ap_config: &ApConfig) -> Self {
-    Self {
-      ap: wifi_ap_config_t {
-        ssid: ap_config.ssid.ssid,
-        ssid_len: ap_config.ssid.ssid_len as u8,
-        password: ap_config.password.password,
-        channel: ap_config.channel,
-        authmode: ap_config.auth_mode.into(),
-        ssid_hidden: ap_config.ssid_hidden as u8,
-        max_connection: ap_config.max_connection,
-        beacon_interval: ap_config.beacon_interval,
-        pairwise_cipher: ap_config.pairwise_cipher.into(),
-      },
-    }
-  }
-}
-
 /// Builder for [`ApConfig`](struct.ApConfig.html).
 pub struct ApConfigBuilder {
   ssid: Option<Ssid>,
   password: Password,
-  channel: u8,
+  channel: Option<NonZeroU8>,
   auth_mode: AuthMode,
-  max_connection: u8,
+  max_connection: Option<NonZeroU8>,
   ssid_hidden: bool,
-  beacon_interval: u16,
+  beacon_interval: Option<NonZeroU16>,
   pairwise_cipher: Cipher,
 }
 
@@ -96,11 +96,11 @@ impl Default for ApConfigBuilder {
     Self {
       ssid: None,
       password: Default::default(),
-      channel: 0,
+      channel: None,
       auth_mode: AuthMode::Open,
-      max_connection: 4,
+      max_connection: NonZeroU8::new(4),
       ssid_hidden: false,
-      beacon_interval: 100,
+      beacon_interval: NonZeroU16::new(100),
       pairwise_cipher: Cipher::None,
     }
   }
@@ -118,15 +118,21 @@ impl ApConfigBuilder {
   }
 
   pub fn build(&self) -> ApConfig {
-    ApConfig {
-      ssid: self.ssid.clone().expect("missing SSID"),
-      password: self.password.clone(),
-      channel: self.channel,
-      auth_mode: self.auth_mode,
-      max_connection: self.max_connection,
-      ssid_hidden: self.ssid_hidden,
-      beacon_interval: self.beacon_interval,
-      pairwise_cipher: self.pairwise_cipher,
-    }
+    let ssid = self.ssid.clone().expect("missing SSID");
+    let ssid_len = ssid.len() as u8;
+
+    ApConfig(wifi_config_t {
+      ap: wifi_ap_config_t {
+        ssid: ssid.0,
+        ssid_len,
+        password: self.password.clone().0,
+        channel: unsafe { mem::transmute(self.channel) },
+        authmode: self.auth_mode.into(),
+        ssid_hidden: self.ssid_hidden as u8,
+        max_connection: unsafe { mem::transmute(self.max_connection) },
+        beacon_interval: unsafe { mem::transmute(self.beacon_interval) },
+        pairwise_cipher: self.pairwise_cipher.into(),
+      },
+    })
   }
 }

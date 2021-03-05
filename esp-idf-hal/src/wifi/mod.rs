@@ -3,6 +3,7 @@ use std::str::Utf8Error;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::SeqCst};
 use core::task::{Poll, Context, Waker};
 use core::pin::Pin;
+use core::marker::PhantomData;
 
 use core::fmt;
 use macaddr::MacAddr6;
@@ -58,13 +59,53 @@ impl fmt::Display for WifiConfigError {
   }
 }
 
+#[derive(Debug)]
+pub struct Ap {
+  mode: ApMode,
+  // config: ApConfig,
+}
+
+impl Ap {
+  // pub fn config(&self) -> &ApConfig {
+  //   &self.config
+  // }
+
+  pub fn ip_info(&self) -> IpInfo {
+    Interface::Ap.ip_info()
+  }
+}
+
+#[derive(Debug)]
+pub struct Sta {
+  mode: StaMode,
+  // config: StaConfig,
+}
+
+impl Sta {
+  // pub fn config(&self) -> &StaConfig {
+  //   &self.config
+  // }
+
+  pub fn ip_info(&self) -> IpInfo {
+    Interface::Sta.ip_info()
+  }
+}
+
+#[derive(Debug)]
+enum WifiInner {
+  Off,
+  Ap(Ap),
+  Sta(Sta),
+  ApSta(Ap, Sta),
+}
+
 /// An instance of the WiFi peripheral.
 #[must_use = "WiFi will be stopped and deinitialized immediately. Drop it explicitly after you are done using it or create a named binding."]
 #[derive(Debug)]
 pub struct Wifi<T = ()> {
   ap_mode: Option<ApMode>,
   sta_mode: Option<StaMode>,
-  config: T,
+  config: Option<T>,
   deinit_on_drop: bool,
   ip_info: Option<IpInfo>,
 }
@@ -113,6 +154,7 @@ static STA_COUNT: AtomicU8 = AtomicU8::new(0);
 fn get_mode() -> Result<wifi_mode_t, EspError> {
   let mut mode = wifi_mode_t::WIFI_MODE_NULL;
   esp_ok!(esp_wifi_get_mode(&mut mode))?;
+  eprintln!("esp_wifi_get_mode: {:?} ({} APs, {} STAs)", mode, AP_COUNT.load(SeqCst), STA_COUNT.load(SeqCst));
   Ok(mode)
 }
 
@@ -133,7 +175,9 @@ impl Drop for ApMode {
 }
 
 fn enter_ap_mode() -> Result<(), EspError> {
-  if AP_COUNT.fetch_add(1, SeqCst) > 0 {
+  let count = AP_COUNT.fetch_add(1, SeqCst);
+  eprintln!("AP ENTER {}", count);
+  if count > 0 {
     return Ok(())
   }
 
@@ -146,25 +190,35 @@ fn enter_ap_mode() -> Result<(), EspError> {
     _ => unreachable!(),
   };
 
+  eprintln!("{:?} -> {:?}", current_mode, new_mode);
   esp_ok!(esp_wifi_set_mode(new_mode))
 }
 
 fn leave_ap_mode() -> Result<(), EspError> {
-  if AP_COUNT.fetch_sub(1, SeqCst) != 1 {
+  let count = AP_COUNT.fetch_sub(1, SeqCst);
+  eprintln!("AP LEAVE {}", count);
+  if count != 1 {
     return Ok(())
   }
 
   let current_mode = get_mode()?;
 
-  match current_mode {
-    wifi_mode_t::WIFI_MODE_AP => {
-      esp_ok!(esp_wifi_stop())
-    },
-    wifi_mode_t::WIFI_MODE_APSTA => {
-      esp_ok!(esp_wifi_set_mode(wifi_mode_t::WIFI_MODE_STA))
-    },
+  let new_mode = match current_mode {
+    wifi_mode_t::WIFI_MODE_AP => wifi_mode_t::WIFI_MODE_NULL,
+    wifi_mode_t::WIFI_MODE_APSTA => wifi_mode_t::WIFI_MODE_STA,
     _ => unreachable!(),
+  };
+
+  eprintln!("{:?} -> {:?}", current_mode, new_mode);
+  esp_ok!(esp_wifi_set_mode(new_mode))?;
+  get_mode()?;
+
+  if new_mode == wifi_mode_t::WIFI_MODE_NULL {
+    // esp_ok!(esp_wifi_restore())?;
+    esp_ok!(esp_wifi_stop())?;
   }
+
+  Ok(())
 }
 
 #[derive(Debug)]
@@ -184,7 +238,9 @@ impl Drop for StaMode {
 }
 
 fn enter_sta_mode() -> Result<(), EspError> {
-  if STA_COUNT.fetch_add(1, SeqCst) > 0 {
+  let count = STA_COUNT.fetch_add(1, SeqCst);
+  eprintln!("STA ENTER {}", count);
+  if count > 0 {
     return Ok(())
   }
 
@@ -197,25 +253,35 @@ fn enter_sta_mode() -> Result<(), EspError> {
     _ => unreachable!(),
   };
 
+  eprintln!("{:?} -> {:?}", current_mode, new_mode);
   esp_ok!(esp_wifi_set_mode(new_mode))
 }
 
 fn leave_sta_mode() -> Result<(), EspError> {
-  if STA_COUNT.fetch_sub(1, SeqCst) != 1 {
+  let count = STA_COUNT.fetch_sub(1, SeqCst);
+  eprintln!("STA LEAVE {}", count);
+  if count != 1 {
     return Ok(())
   }
 
   let current_mode = get_mode()?;
 
-  match current_mode {
-    wifi_mode_t::WIFI_MODE_STA => {
-      esp_ok!(esp_wifi_stop())
-    },
-    wifi_mode_t::WIFI_MODE_APSTA => {
-      esp_ok!(esp_wifi_set_mode(wifi_mode_t::WIFI_MODE_AP))
-    },
+  let new_mode = match current_mode {
+    wifi_mode_t::WIFI_MODE_STA => wifi_mode_t::WIFI_MODE_NULL,
+    wifi_mode_t::WIFI_MODE_APSTA => wifi_mode_t::WIFI_MODE_AP,
     _ => unreachable!(),
+  };
+
+  eprintln!("{:?} -> {:?}", current_mode, new_mode);
+  esp_ok!(esp_wifi_set_mode(new_mode))?;
+  get_mode()?;
+
+  if new_mode == wifi_mode_t::WIFI_MODE_NULL {
+    // esp_ok!(esp_wifi_restore())?;
+    esp_ok!(esp_wifi_stop())?;
   }
+
+  Ok(())
 }
 
 static WIFI_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -234,38 +300,38 @@ impl Wifi {
       let config = wifi_init_config_t::default();
       esp_ok!(esp_wifi_init(&config)).expect("failed to initialize WiFi with default configuration");
 
-      Some(Wifi { ap_mode: None, sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
+      Some(Wifi { ap_mode: None, sta_mode: None, config: Some(()), deinit_on_drop: true, ip_info: None })
     }
   }
 
   /// Start an access point using the specified [`ApConfig`](struct.ApConfig.html).
-  pub fn start_ap(mut self, config: ApConfig) -> Result<WifiRunning, WifiError> {
+  pub fn start_ap(mut self, mut config: ApConfig) -> Result<WifiRunning, WifiError> {
+    eprintln!("Starting AP");
+
     self.deinit_on_drop = false;
 
     let interface = Interface::Ap;
     interface.init();
-    let mut ap_config = wifi_config_t::from(&config);
 
     let ap_mode = ApMode::enter();
 
-    if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_AP, &mut ap_config)).and_then(|_| {
+    if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_AP, &mut config.0)).and_then(|_| {
       esp_ok!(esp_wifi_start())
     }) {
       return Err(err.into());
     }
-    Ok(WifiRunning::Ap(Wifi { ap_mode: Some(ap_mode), sta_mode: self.sta_mode.take(), config, deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
+    Ok(WifiRunning::Ap(Wifi { ap_mode: Some(ap_mode), sta_mode: self.sta_mode.take(), config: Some(config), deinit_on_drop: true, ip_info: Some(interface.ip_info()) }))
   }
 
   /// Connect to a WiFi network using the specified [`StaConfig`](struct.StaConfig.html).
-  pub fn connect_sta(mut self, config: StaConfig) -> ConnectFuture {
-    self.deinit_on_drop = false;
+  pub fn connect_sta(mut self, mut config: StaConfig) -> ConnectFuture {
+    eprintln!("Starting STA connection");
 
     Interface::Sta.init();
 
     let sta_mode = Some(StaMode::enter());
 
-    let mut sta_config = wifi_config_t::from(&config);
-    let state = if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut sta_config)) {
+    let state = if let Err(err) = esp_ok!(esp_wifi_set_config(wifi_interface_t::WIFI_IF_STA, &mut config.0)) {
         ConnectFutureState::Failed(err.into())
     } else {
       ConnectFutureState::Starting
@@ -306,7 +372,7 @@ impl<T> Wifi<T> {
   }
 
   pub fn config(&self) -> &T {
-    &self.config
+    self.config.as_ref().unwrap()
   }
 }
 
@@ -334,10 +400,11 @@ impl Wifi<StaConfig> {
 
   /// Stop a running WiFi in station mode.
   pub fn stop(mut self) -> (StaConfig, Wifi) {
+    eprintln!("Stopping STA");
+
     self.deinit_on_drop = false;
-    let config = MaybeUninit::uninit();
-    let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
-    (config, Wifi { ap_mode: self.ap_mode.take(), sta_mode: None, config: (), deinit_on_drop: true, ip_info: None })
+    let config = self.config.take().unwrap();
+    (config, Wifi { ap_mode: self.ap_mode.take(), sta_mode: None, config: Some(()), deinit_on_drop: true, ip_info: None })
   }
 }
 
@@ -348,10 +415,11 @@ impl Wifi<ApConfig> {
 
   /// Stop a running WiFi access point.
   pub fn stop(mut self) -> (ApConfig, Wifi) {
+    eprintln!("Stopping AP");
+
     self.deinit_on_drop = false;
-    let config = MaybeUninit::uninit();
-    let config = mem::replace(&mut self.config, unsafe { config.assume_init() });
-    (config, Wifi { ap_mode: None, sta_mode: self.sta_mode.take(), config: (), deinit_on_drop: true, ip_info: None })
+    let config = self.config.take().unwrap();
+    (config, Wifi { ap_mode: None, sta_mode: self.sta_mode.take(), config: Some(()), deinit_on_drop: true, ip_info: None })
   }
 }
 
@@ -476,9 +544,12 @@ impl core::future::Future for ConnectFuture {
         Poll::Pending
       },
       ConnectFutureState::Connected { ref mut ip_info, .. } => {
+        eprintln!("Ended STA connection");
+
         let ip_info = ip_info.take();
-        let config = self.config.take().unwrap();
-        let wifi = self.wifi.as_mut().unwrap();
+        let config = self.config.take();
+        let mut wifi = self.wifi.as_mut().unwrap();
+        wifi.deinit_on_drop = false;
         Poll::Ready(Ok(WifiRunning::Sta(Wifi { ap_mode: wifi.ap_mode.take(), sta_mode: self.sta_mode.take(), config, deinit_on_drop: true, ip_info })))
       },
     }
@@ -513,7 +584,7 @@ extern "C" fn wifi_sta_handler(
 
         eprintln!("EVENT_DATA: {:?}", event);
 
-        let ssid = Ssid { ssid: event.ssid, ssid_len: event.ssid_len as usize };
+        let ssid = Ssid(event.ssid);
         let bssid = MacAddr6::from(event.bssid);
         let channel = event.channel;
         let auth_mode = AuthMode::from(event.authmode);
@@ -527,7 +598,7 @@ extern "C" fn wifi_sta_handler(
 
         eprintln!("EVENT_DATA: {:?}", event);
 
-        let ssid = Ssid { ssid: event.ssid, ssid_len: event.ssid_len as usize };
+        let ssid = Ssid(event.ssid);
         let bssid = MacAddr6::from(event.bssid);
         let reason: wifi_err_reason_t = unsafe { transmute(event.reason as u32) };
 

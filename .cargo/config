@@ -85,11 +85,5 @@ rustflags = [
 
 [target.xtensa-esp32-none-elf]
 rustflags = [
-  "-C", "embed-bitcode=yes", # https://github.com/japaric/xargo/issues/292
-
   "-Z", "link-native-libraries=off",
-
-  "-C", "save-temps",
-
-  "-C", "linker=xtensa-esp32-elf-gcc",
 ]

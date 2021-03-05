@@ -10,10 +10,8 @@ const SSID_MAX_LEN: usize = 32;
 
 /// A WiFi SSID.
 #[derive(Clone)]
-pub struct Ssid {
-  pub(crate) ssid: [u8; SSID_MAX_LEN],
-  pub(crate) ssid_len: usize,
-}
+#[repr(transparent)]
+pub struct Ssid(pub(crate) [u8; SSID_MAX_LEN]);
 
 impl Deref for Ssid {
   type Target = str;
@@ -44,9 +42,12 @@ impl PartialOrd for Ssid {
 }
 
 impl Ssid {
-  #[inline]
+  pub(crate) fn len(&self) -> usize {
+    memchr::memchr(0, &self.0).unwrap_or(SSID_MAX_LEN)
+  }
+
   pub fn as_str(&self) -> &str {
-    &unsafe { str::from_utf8_unchecked(&self.ssid[..self.ssid_len]) }
+    unsafe { &str::from_utf8_unchecked(&self.0[..self.len()]) }
   }
 
   pub fn from_bytes(bytes: &[u8]) -> Result<Ssid, WifiConfigError> {
@@ -71,9 +72,9 @@ impl Ssid {
   ///         does not exceed 32 bytes.
   pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> Ssid {
     let ssid_len = bytes.len();
-    let mut ssid = [0; SSID_MAX_LEN];
-    ptr::copy_nonoverlapping(bytes.as_ptr(), ssid.as_mut_ptr(), ssid_len);
-    Self { ssid, ssid_len }
+    let mut ssid = Self([0; SSID_MAX_LEN]);
+    ptr::copy_nonoverlapping(bytes.as_ptr(), ssid.0.as_mut_ptr(), ssid_len);
+    ssid
   }
 }
 
@@ -87,10 +88,7 @@ impl FromStr for Ssid {
 
 impl fmt::Debug for Ssid {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("Ssid")
-      .field("ssid", &self.as_str())
-      .field("ssid_len", &self.ssid_len)
-      .finish()
+    write!(f, "Ssid({:?})", self.as_str())
   }
 }
 

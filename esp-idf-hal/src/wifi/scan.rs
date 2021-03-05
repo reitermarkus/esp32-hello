@@ -179,7 +179,7 @@ impl ScanFuture {
     };
 
     let config = wifi_scan_config_t {
-      ssid: config.ssid.as_ref().map_or_else(ptr::null_mut, |ssid| ssid.ssid.as_ptr() as *mut _),
+      ssid: config.ssid.as_ref().map_or_else(ptr::null_mut, |ssid| ssid.0.as_ptr() as *mut _),
       bssid: config.bssid.as_ref().map_or_else(ptr::null_mut, |bssid| bssid as *const _ as *mut _),
       channel: config.channel,
       show_hidden: config.show_hidden,

@@ -8,14 +8,16 @@ const PASSWORD_MAX_LEN: usize = 64;
 
 /// A WiFi password.
 #[derive(Clone)]
-pub struct Password {
-  pub(crate) password: [u8; PASSWORD_MAX_LEN],
-  pub(crate) password_len: usize,
-}
+#[repr(transparent)]
+pub struct Password(pub(crate) [u8; PASSWORD_MAX_LEN]);
 
 impl Password {
+  fn len(&self) -> usize {
+    memchr::memchr(0, &self.0).unwrap_or(PASSWORD_MAX_LEN)
+  }
+
   pub fn as_str(&self) -> &str {
-    &unsafe { str::from_utf8_unchecked(&self.password[..self.password_len]) }
+    &unsafe { str::from_utf8_unchecked(&self.0[..self.len()]) }
   }
 
   pub fn from_bytes(bytes: &[u8]) -> Result<Password, WifiConfigError> {
@@ -40,15 +42,16 @@ impl Password {
   ///         does not exceed 64 bytes.
   pub unsafe fn from_bytes_unchecked(bytes: &[u8]) -> Password {
     let password_len = bytes.len();
-    let mut password = [0; PASSWORD_MAX_LEN];
-    ptr::copy_nonoverlapping(bytes.as_ptr(), password.as_mut_ptr(), password_len);
-    Self { password, password_len }
+    let mut password = Self([0; PASSWORD_MAX_LEN]);
+    ptr::copy_nonoverlapping(bytes.as_ptr(), password.0.as_mut_ptr(), password_len);
+    password
   }
 }
 
 impl Default for Password {
+  #[inline(always)]
   fn default() -> Self {
-    Self { password: [0; PASSWORD_MAX_LEN], password_len: 0 }
+    Self([0; PASSWORD_MAX_LEN])
   }
 }
 
@@ -63,8 +66,7 @@ impl FromStr for Password {
 impl fmt::Debug for Password {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("Password")
-      .field("password", &"********")
-      .field("password_len", &8)
+      .field("password", &self.as_str())
       .finish()
   }
 }
