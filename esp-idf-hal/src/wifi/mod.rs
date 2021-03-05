@@ -123,13 +123,13 @@ fn initialize_network_interface() {
   static NETIF_STATE: AtomicU8 = AtomicU8::new(0);
 
   loop {
-    match NETIF_STATE.compare_and_swap(0, 1, SeqCst) {
-      0 => {
+    match NETIF_STATE.compare_exchange_weak(0, 1, SeqCst, SeqCst) {
+      Ok(0) => {
         esp_ok!(esp_netif_init()).expect("failed to initialize network interface");
         NETIF_STATE.store(2, SeqCst);
         return;
       },
-      1 => continue,
+      Err(1) => continue,
       _ => return,
     }
   }
@@ -139,13 +139,13 @@ fn event_loop_create_default() {
   static EVENT_LOOP_STATE: AtomicU8 = AtomicU8::new(0);
 
   loop {
-    match EVENT_LOOP_STATE.compare_and_swap(0, 1, SeqCst) {
-      0 => {
+    match EVENT_LOOP_STATE.compare_exchange_weak(0, 1, SeqCst, SeqCst) {
+      Ok(0) => {
         esp_ok!(esp_event_loop_create_default()).expect("failed to initialize default event loop");
         EVENT_LOOP_STATE.store(2, SeqCst);
         return;
       },
-      1 => continue,
+      Err(1) => continue,
       _ => return,
     }
   }
@@ -291,7 +291,7 @@ static WIFI_ACTIVE: AtomicBool = AtomicBool::new(false);
 impl Wifi {
   /// Take the WiFi peripheral if it is not already in use.
   pub fn take() -> Option<Wifi> {
-    if WIFI_ACTIVE.compare_and_swap(false, true, SeqCst) {
+    if WIFI_ACTIVE.compare_exchange(false, true, SeqCst, SeqCst) == Err(true) {
       None
     } else {
       initialize_network_interface();
@@ -393,7 +393,7 @@ impl Wifi {
     eprintln!("Stopping STA");
 
     let inner = match mem::take(&mut self.inner) {
-      WifiInner::ApSta(ap, sta) => WifiInner::Ap(ap),
+      WifiInner::ApSta(ap, _) => WifiInner::Ap(ap),
       _ => WifiInner::None,
     };
     self.inner = inner;
@@ -406,7 +406,7 @@ impl Wifi {
     eprintln!("Stopping AP");
 
     let inner = match mem::take(&mut self.inner) {
-      WifiInner::ApSta(ap, sta) => WifiInner::Sta(sta),
+      WifiInner::ApSta(_, sta) => WifiInner::Sta(sta),
       _ => WifiInner::None,
     };
     self.inner = inner;
@@ -537,7 +537,6 @@ impl core::future::Future for ConnectFuture {
       ConnectFutureState::Connected { ref mut ip_info, .. } => {
         eprintln!("Ended STA connection");
 
-        let ip_info = ip_info.take();
         let mode = self.mode.take().unwrap();
 
         let mut wifi = self.wifi.take().unwrap();
