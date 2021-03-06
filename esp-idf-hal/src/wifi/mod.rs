@@ -123,7 +123,7 @@ fn initialize_network_interface() {
   static NETIF_STATE: AtomicU8 = AtomicU8::new(0);
 
   loop {
-    match NETIF_STATE.compare_exchange_weak(0, 1, SeqCst, SeqCst) {
+    match NETIF_STATE.compare_exchange(0, 1, SeqCst, SeqCst) {
       Ok(0) => {
         esp_ok!(esp_netif_init()).expect("failed to initialize network interface");
         NETIF_STATE.store(2, SeqCst);
@@ -139,7 +139,7 @@ fn event_loop_create_default() {
   static EVENT_LOOP_STATE: AtomicU8 = AtomicU8::new(0);
 
   loop {
-    match EVENT_LOOP_STATE.compare_exchange_weak(0, 1, SeqCst, SeqCst) {
+    match EVENT_LOOP_STATE.compare_exchange(0, 1, SeqCst, SeqCst) {
       Ok(0) => {
         esp_ok!(esp_event_loop_create_default()).expect("failed to initialize default event loop");
         EVENT_LOOP_STATE.store(2, SeqCst);

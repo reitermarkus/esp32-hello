@@ -100,7 +100,7 @@ impl NonVolatileStorage {
 
   pub(crate) fn init_default() -> Result<(), EspError> {
     loop {
-      match DEFAULT_INSTANCES.compare_exchange_weak(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
+      match DEFAULT_INSTANCES.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) => {
           let res = match Self::init(DEFAULT_PART_NAME) {
             Err(err) if err.code == ESP_ERR_NVS_NO_FREE_PAGES as esp_err_t || err.code == ESP_ERR_NVS_NEW_VERSION_FOUND as esp_err_t => {
@@ -132,7 +132,7 @@ impl NonVolatileStorage {
 
   pub(crate) fn deinit_default() {
     loop {
-      match DEFAULT_INSTANCES.compare_exchange_weak(2, 1, Ordering::SeqCst, Ordering::SeqCst) {
+      match DEFAULT_INSTANCES.compare_exchange(2, 1, Ordering::SeqCst, Ordering::SeqCst) {
         Ok(_) => {
           unsafe { nvs_flash_deinit_partition(DEFAULT_PART_NAME.as_ptr()) };
           DEFAULT_INSTANCES.fetch_sub(1, Ordering::SeqCst);

@@ -59,7 +59,7 @@ impl Interface {
     match self {
       Self::Ap => {
         loop {
-          match AP_PTR.compare_exchange_weak(0, INIT_SENTINEL, Ordering::SeqCst, Ordering::SeqCst) {
+          match AP_PTR.compare_exchange(0, INIT_SENTINEL, Ordering::SeqCst, Ordering::SeqCst) {
             Ok(_) => {
               let ptr = unsafe { esp_netif_create_default_wifi_ap() };
               AP_PTR.store(ptr as _, Ordering::SeqCst);
@@ -72,7 +72,7 @@ impl Interface {
       },
       Self::Sta => {
         loop {
-          match STA_PTR.compare_exchange_weak(0, INIT_SENTINEL, Ordering::SeqCst, Ordering::SeqCst) {
+          match STA_PTR.compare_exchange(0, INIT_SENTINEL, Ordering::SeqCst, Ordering::SeqCst) {
             Ok(_) => {
               let ptr = unsafe { esp_netif_create_default_wifi_sta() };
               STA_PTR.store(ptr as _, Ordering::SeqCst);
