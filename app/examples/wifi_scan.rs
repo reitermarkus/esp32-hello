@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures::executor::block_on;
 
-use esp_idf_hal::{nvs::*, wifi::*};
+use esp_idf_hal::wifi::*;
 
 #[no_mangle]
 fn app_main() {
