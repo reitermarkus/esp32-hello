@@ -105,6 +105,16 @@ impl StaConfig {
     unsafe { mem::transmute(&self.0.sta.password) }
   }
 
+  #[inline]
+  pub fn scan_method(&self) -> &ScanMethod {
+    unsafe { mem::transmute(&self.0.sta.scan_method) }
+  }
+
+  #[inline]
+  pub fn channel(&self) -> Option<&NonZeroU8> {
+    unsafe { mem::transmute(&self.0.sta.channel) }
+  }
+
   pub fn builder() -> StaConfigBuilder {
     StaConfigBuilder::default()
   }

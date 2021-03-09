@@ -129,11 +129,11 @@ impl From<Interface> for MacAddr {
 }
 
 /// IP information for an [`Interface`](enum.Interface.html).
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct IpInfo {
-  ip: Ipv4Addr,
-  netmask: Ipv4Addr,
-  gateway: Ipv4Addr,
+  pub(crate) ip: Ipv4Addr,
+  pub(crate) netmask: Ipv4Addr,
+  pub(crate) gateway: Ipv4Addr,
 }
 
 impl IpInfo {

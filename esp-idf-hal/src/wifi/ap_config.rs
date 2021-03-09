@@ -13,7 +13,7 @@ pub struct ApConfig(pub(crate) wifi_config_t);
 
 impl fmt::Debug for ApConfig {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("ApConfigBuilder")
+    f.debug_struct("ApConfig")
       .field("ssid", &self.ssid())
       .field("password", &self.password())
       .field("channel", &self.channel())

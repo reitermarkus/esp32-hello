@@ -33,7 +33,7 @@ fn write_template(client: &mut TcpStream) -> io::Result<()> {
   writeln!(client, "{}", include_str!("index.html"))
 }
 
-async fn handle_index(wifi: Arc<Mutex<Option<Wifi>>>, mut client: TcpStream) -> io::Result<()> {
+async fn handle_index(wifi: Arc<Mutex<Wifi>>, mut client: TcpStream) -> io::Result<()> {
   write_template(&mut client)?;
 
   writeln!(client, r##"
@@ -58,20 +58,19 @@ async fn handle_index(wifi: Arc<Mutex<Option<Wifi>>>, mut client: TcpStream) -> 
 
   writeln!(client, "<datalist id='ssids'>")?;
 
-  if let Some(wifi) = &mut *wifi.lock().unwrap() {
-    match wifi.scan(&scan_config).await {
-      Ok(mut aps) => {
-        aps.sort_by(|a, b| a.ssid().cmp(b.ssid()));
-        aps.dedup_by(|a, b| a.ssid() == b.ssid());
+  let wifi = &mut *wifi.lock().unwrap();
+  match wifi.scan(&scan_config).await {
+    Ok(mut aps) => {
+      aps.sort_by(|a, b| a.ssid().cmp(b.ssid()));
+      aps.dedup_by(|a, b| a.ssid() == b.ssid());
 
-        for ssid in aps.iter().map(|ap| ap.ssid()).filter(|ssid| !ssid.is_empty()) {
-          writeln!(client, "<option>{}</option>", ssid)?;
-        }
-
-      },
-      Err(err) => {
-        eprintln!("WiFi scan failed: {}", err);
+      for ssid in aps.iter().map(|ap| ap.ssid()).filter(|ssid| !ssid.is_empty()) {
+        writeln!(client, "<option>{}</option>", ssid)?;
       }
+
+    },
+    Err(err) => {
+      eprintln!("WiFi scan failed: {}", err);
     }
   }
 
@@ -111,7 +110,7 @@ fn handle_internal_error(mut client: TcpStream) -> io::Result<()> {
 pub async fn handle_request(
   mut client: TcpStream, addr: SocketAddr,
   wifi_storage: Arc<Mutex<NameSpace>>,
-  wifi_running: Arc<Mutex<Option<Wifi>>>,
+  wifi: Arc<Mutex<Wifi>>,
 ) {
   println!("Handling request from {} …", addr);
 
@@ -135,7 +134,7 @@ pub async fn handle_request(
       println!("{} {} - {} bytes", method, path, len);
 
       match (method, path) {
-        ("GET", "/") => handle_index(Arc::clone(&wifi_running), client).await,
+        ("GET", "/") => handle_index(Arc::clone(&wifi), client).await,
         ("GET", "/hotspot-detect.html") => handle_hotspot_detect(client),
         ("POST", "/connect") => {
           let body = &buf[header_len..len];
@@ -146,20 +145,18 @@ pub async fn handle_request(
             wifi_storage.set::<&str>("ssid", &ssid.as_str()).expect("Failed saving SSID");
             wifi_storage.set::<&str>("password", &password.as_str()).expect("Failed saving password");
 
-            let mut wifi_running = wifi_running.lock().unwrap();
-            let wifi = wifi_running.take().unwrap();
+            let wifi = &mut *wifi.lock().unwrap();
             let ap_config = wifi.as_ap().unwrap().config();
 
             let message = format!(" Connecting to “{}” …", ssid.as_str());
             let res = handle_connection_success(client, &message);
 
-            let wifi = wifi.stop_ap();
-            match connect_ssid_password(wifi, ssid, password).await {
-              Ok(wifi) => {
-                wifi_running.replace(wifi);
-              },
+            wifi.stop_ap();
+            match connect_ssid_password(wifi, ssid.clone(), password).await {
+              Ok(_) => (),
               Err(err) => {
-                wifi_running.replace(err.wifi().start_ap(ap_config).expect("Failed to start access point"));
+                eprintln!("Failed to connect to {}: {}", ssid.as_str(), err);
+                wifi.start_ap(ap_config).expect("Failed to start access point");
               }
             }
 
@@ -180,7 +177,7 @@ pub async fn handle_request(
 }
 
 /// Try to connect to an access point with the given `ssid` and `password` in station mode, otherwise revert to access point mode.
-pub async fn connect_ssid_password(wifi: Wifi, ssid: Ssid, password: Password) -> Result<Wifi, WifiError<Wifi>> {
+pub async fn connect_ssid_password(wifi: &mut Wifi, ssid: Ssid, password: Password) -> Result<ConnectionInfo, WifiError> {
   let sta_config = StaConfig::builder()
     .ssid(ssid)
     .password(password)
@@ -189,11 +186,11 @@ pub async fn connect_ssid_password(wifi: Wifi, ssid: Ssid, password: Password) -
   eprintln!("Connecting to '{}' with password '{}' …", sta_config.ssid(), sta_config.password());
 
   match wifi.connect_sta(sta_config).await {
-    Ok(wifi) => {
-      if let Some(sta) = wifi.as_sta() {
-        eprintln!("Connected to '{}' with IP '{}'.", sta.config().ssid(), sta.ip_info().ip());
-      }
-      Ok(wifi)
+    Ok(connection_info) => {
+      eprintln!("Connected to '{}' ({}) on channel {} with IP '{}'.",
+                connection_info.ssid(), connection_info.bssid(),
+                connection_info.channel(), connection_info.ip_info().ip());
+      Ok(connection_info)
     },
     Err(err) => Err(err),
   }

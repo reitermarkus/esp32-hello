@@ -1,4 +1,5 @@
 use core::mem::{self, transmute, MaybeUninit};
+use core::num::NonZeroU8;
 use std::str::Utf8Error;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering::SeqCst};
 use core::task::{Poll, Context, Waker};
@@ -308,7 +309,7 @@ impl Wifi {
   }
 
   /// Start an access point using the specified [`ApConfig`](struct.ApConfig.html).
-  pub fn start_ap(mut self, mut config: ApConfig) -> Result<Wifi, WifiError> {
+  pub fn start_ap(&mut self, mut config: ApConfig) -> Result<(), WifiError> {
     eprintln!("Starting AP");
 
     let interface = Interface::Ap;
@@ -328,11 +329,11 @@ impl Wifi {
     };
     self.inner = inner;
 
-    Ok(self)
+    Ok(())
   }
 
   /// Connect to a WiFi network using the specified [`StaConfig`](struct.StaConfig.html).
-  pub fn connect_sta(self, mut config: StaConfig) -> ConnectFuture {
+  pub fn connect_sta<'w>(&'w mut self, mut config: StaConfig) -> ConnectFuture<'w> {
     eprintln!("Starting STA connection");
 
     Interface::Sta.init();
@@ -345,14 +346,14 @@ impl Wifi {
       ConnectFutureState::Starting
     };
 
-    ConnectFuture { waker: None, wifi: Some(self), mode: sta_mode, state, handlers: None }
+    ConnectFuture { waker: None, mode: sta_mode, state, handlers: None, wifi: self }
   }
 }
 
 impl Wifi {
   /// Scan nearby WiFi networks using the specified [`ScanConfig`](struct.ScanConfig.html).
-  pub fn scan(&mut self, scan_config: &ScanConfig) -> ScanFuture {
-    ScanFuture::new(scan_config)
+  pub fn scan(&mut self, scan_config: &ScanConfig) -> ScanFuture<'_> {
+    ScanFuture::new(self, scan_config)
   }
 
   pub fn as_sta(&self) -> Option<&Sta> {
@@ -389,7 +390,7 @@ impl Drop for Wifi {
 
 impl Wifi {
   /// Stop a running WiFi in station mode.
-  pub fn stop_sta(mut self) -> Wifi {
+  pub fn stop_sta(&mut self) -> &mut Wifi {
     eprintln!("Stopping STA");
 
     let inner = match mem::take(&mut self.inner) {
@@ -398,11 +399,11 @@ impl Wifi {
     };
     self.inner = inner;
 
-     self
+    self
   }
 
   /// Stop a running WiFi access point.
-  pub fn stop_ap(mut self) -> Wifi {
+  pub fn stop_ap(&mut self) -> &mut Wifi {
     eprintln!("Stopping AP");
 
     let inner = match mem::take(&mut self.inner) {
@@ -419,20 +420,57 @@ impl Wifi {
 enum ConnectFutureState {
   Failed(WifiError),
   Starting,
-  ConnectedWithoutIp { ssid: Ssid, bssid: MacAddr6, channel: u8, auth_mode: AuthMode },
-  Connected { ip_info: Option<IpInfo>, ssid: Ssid, bssid: MacAddr6, channel: u8, auth_mode: AuthMode },
+  ConnectedWithoutIp { ssid: Ssid, bssid: MacAddr6, channel: Option<NonZeroU8>, auth_mode: AuthMode },
+  Connected { ip_info: IpInfo, ssid: Ssid, bssid: MacAddr6, channel: Option<NonZeroU8>, auth_mode: AuthMode },
 }
 
 /// A future representing an ongoing connection to an access point.
 #[must_use = "futures do nothing unless polled"]
 #[pin_project]
 #[derive(Debug)]
-pub struct ConnectFuture {
+pub struct ConnectFuture<'w> {
   waker: Option<Waker>,
-  wifi: Option<Wifi>,
   mode: Option<StaMode>,
   state: ConnectFutureState,
   handlers: Option<[EventHandler; 4]>,
+  wifi: &'w mut Wifi,
+}
+
+/// The type returned when a [`ConnectFuture`](struct.ConnectFuture.html) succeeds.
+#[derive(Debug, Clone)]
+pub struct ConnectionInfo {
+  ip_info: IpInfo,
+  ssid: Ssid,
+  bssid: MacAddr6,
+  channel: NonZeroU8,
+  auth_mode: AuthMode,
+}
+
+impl ConnectionInfo {
+  #[inline]
+  pub fn ip_info(&self) -> &IpInfo {
+    &self.ip_info
+  }
+
+  #[inline]
+  pub fn ssid(&self) -> &Ssid {
+    &self.ssid
+  }
+
+  #[inline]
+  pub fn bssid(&self) -> &MacAddr6 {
+    &self.bssid
+  }
+
+  #[inline]
+  pub fn channel(&self) -> NonZeroU8 {
+    self.channel
+  }
+
+  #[inline]
+  pub fn auth_mode(&self) -> AuthMode {
+    self.auth_mode
+  }
 }
 
 /// The error type returned when a [`ConnectFuture`](struct.ConnectFuture.html) fails.
@@ -451,49 +489,30 @@ impl fmt::Display for ConnectionError {
 
 /// The error type for operations on a [`Wifi`](struct.Wifi.html) instance.
 #[derive(Debug, Clone)]
-pub enum WifiError<T = ()> {
+pub enum WifiError {
   /// An internal error not directly related to WiFi.
-  Internal(T, EspError),
+  Internal(EspError),
   /// A connection error returned when a [`ConnectFuture`](struct.ConnectFuture.html) fails.
-  ConnectionError(T, ConnectionError),
+  ConnectionError(ConnectionError),
 }
 
-impl WifiError<()> {
-  pub(crate) fn with_wifi<W>(self, wifi: W) -> WifiError<W> {
-    match self {
-      Self::Internal(_, esp_error) => WifiError::Internal(wifi, esp_error),
-      Self::ConnectionError(_, error) => WifiError::ConnectionError(wifi, error),
-    }
-  }
-}
-
-impl WifiError<Wifi> {
-  /// Create a new uninitialized [`Wifi`](struct.Wifi.html) instance.
-  pub fn wifi(self) -> Wifi {
-    match self {
-      Self::Internal(wifi, _) => wifi,
-      Self::ConnectionError(wifi, _) => wifi,
-    }
-  }
-}
-
-impl From<EspError> for WifiError<()> {
+impl From<EspError> for WifiError {
   fn from(esp_error: EspError) -> Self {
-    Self::Internal((), esp_error)
+    Self::Internal(esp_error)
   }
 }
 
-impl<T> fmt::Display for WifiError<T> {
+impl fmt::Display for WifiError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
-      Self::Internal(_, esp_error) => esp_error.fmt(f),
-      Self::ConnectionError(_, error) => error.fmt(f),
+      Self::Internal(esp_error) => esp_error.fmt(f),
+      Self::ConnectionError(error) => error.fmt(f),
     }
   }
 }
 
-impl core::future::Future for ConnectFuture {
-  type Output = Result<Wifi, WifiError<Wifi>>;
+impl core::future::Future for ConnectFuture<'_> {
+  type Output = Result<ConnectionInfo, WifiError>;
 
   #[cfg(target_device = "esp8266")]
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -518,36 +537,47 @@ impl core::future::Future for ConnectFuture {
         match register_handlers(&mut *self as *mut _) {
           Ok(handlers) => { self.handlers.replace(handlers); },
           Err(err) => {
-            return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
+            return Poll::Ready(Err(WifiError::from(err)));
           },
         }
 
         if let Err(err) = esp_ok!(esp_wifi_start()) {
-          return Poll::Ready(Err(WifiError::from(err).with_wifi(self.wifi.take().unwrap())));
+          return Poll::Ready(Err(WifiError::from(err)));
         }
 
         Poll::Pending
       },
       ConnectFutureState::Failed(ref err) => {
-        return Poll::Ready(Err(WifiError::from(err.clone()).with_wifi(self.wifi.take().unwrap())));
+        return Poll::Ready(Err(WifiError::from(err.clone())));
       },
       ConnectFutureState::ConnectedWithoutIp { .. } => {
         Poll::Pending
       },
-      ConnectFutureState::Connected { ref mut ip_info, .. } => {
+      ConnectFutureState::Connected {
+        ip_info,
+        ssid,
+        bssid,
+        channel,
+        auth_mode,
+      } => {
         eprintln!("Ended STA connection");
 
+        let connection_info = ConnectionInfo {
+          ip_info,
+          ssid,
+          bssid,
+          channel: channel.unwrap(),
+          auth_mode,
+        };
+
         let mode = self.mode.take().unwrap();
-
-        let mut wifi = self.wifi.take().unwrap();
-
-        let inner = match mem::take(&mut wifi.inner) {
+        let inner = match mem::take(&mut self.wifi.inner) {
           WifiInner::Ap(ap) => WifiInner::ApSta(ap, Sta { mode }),
           _ => WifiInner::Sta(Sta { mode }),
         };
-        wifi.inner = inner;
+        self.wifi.inner = inner;
 
-        Poll::Ready(Ok(wifi))
+        Poll::Ready(Ok(connection_info))
       },
     }
   }
@@ -583,7 +613,7 @@ extern "C" fn wifi_sta_handler(
 
         let ssid = Ssid(event.ssid);
         let bssid = MacAddr6::from(event.bssid);
-        let channel = event.channel;
+        let channel = NonZeroU8::new(event.channel);
         let auth_mode = AuthMode::from(event.authmode);
 
         f.state = ConnectFutureState::ConnectedWithoutIp { ssid, bssid, channel, auth_mode };
@@ -603,7 +633,7 @@ extern "C" fn wifi_sta_handler(
           ssid, bssid, reason
         };
 
-        f.state = ConnectFutureState::Failed(WifiError::ConnectionError((), error));
+        f.state = ConnectFutureState::Failed(WifiError::ConnectionError(error));
 
         eprintln!("EVENT_STATE: {:?}", f.state);
 
@@ -625,7 +655,7 @@ extern "C" fn wifi_sta_handler(
         eprintln!("EVENT_DATA: {:?}", event);
 
         if let ConnectFutureState::ConnectedWithoutIp { ssid, bssid, channel, auth_mode } = mem::replace(&mut f.state, ConnectFutureState::Starting) {
-          f.state = ConnectFutureState::Connected { ip_info: Some(ip_info), ssid, bssid, channel, auth_mode };
+          f.state = ConnectFutureState::Connected { ip_info, ssid, bssid, channel, auth_mode };
         } else {
           unreachable!();
         }

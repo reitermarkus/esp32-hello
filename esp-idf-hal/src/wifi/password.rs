@@ -7,7 +7,7 @@ use super::WifiConfigError;
 const PASSWORD_MAX_LEN: usize = 64;
 
 /// A WiFi password.
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct Password(pub(crate) [u8; PASSWORD_MAX_LEN]);
 

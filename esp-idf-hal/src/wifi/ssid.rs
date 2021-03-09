@@ -9,7 +9,7 @@ use super::WifiConfigError;
 const SSID_MAX_LEN: usize = 32;
 
 /// A WiFi SSID.
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct Ssid(pub(crate) [u8; SSID_MAX_LEN]);
 

@@ -1,5 +1,6 @@
 use core::cmp;
 use core::future::Future;
+use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
 use core::pin::Pin;
 use core::ptr;
@@ -143,14 +144,15 @@ enum ScanFutureState {
 #[must_use = "futures do nothing unless polled"]
 #[pin_project]
 #[derive(Debug)]
-pub struct ScanFuture {
+pub struct ScanFuture<'w> {
   handler: Option<EventHandler>,
   state: ScanFutureState,
+  wifi: &'w mut Wifi,
 }
 
-impl ScanFuture {
+impl<'w> ScanFuture<'w> {
   #[inline]
-  pub(crate) fn new(config: &ScanConfig) -> Self {
+  pub(crate) fn new(wifi: &'w mut Wifi, config: &ScanConfig) -> Self {
     let duration_as_millis_rounded = |dur: Duration| {
       let nanos = dur.as_nanos();
 
@@ -192,11 +194,15 @@ impl ScanFuture {
       scan_time,
     };
 
-    Self { handler: None, state: ScanFutureState::Starting(config, StaMode::enter(), None) }
+    Self {
+      handler: None,
+      state: ScanFutureState::Starting(config, StaMode::enter(), None),
+      wifi,
+    }
   }
 }
 
-impl Future for ScanFuture {
+impl Future for ScanFuture<'_> {
   type Output = Result<Vec<ApRecord>, WifiError>;
 
   #[cfg(target_device = "esp8266")]

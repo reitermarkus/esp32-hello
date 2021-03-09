@@ -38,7 +38,7 @@ async fn rust_blink_and_write() -> Result<!, EspError> {
 
     let mut nvs = NonVolatileStorage::default();
 
-    let wifi = Wifi::take().unwrap();
+    let mut wifi = Wifi::take().unwrap();
 
     println!("AP started.");
 
@@ -92,24 +92,22 @@ async fn rust_blink_and_write() -> Result<!, EspError> {
         let ssid = wifi_storage.get::<String>("ssid").ok().and_then(|s| Ssid::from_bytes(s.as_bytes()).ok());
         let password = wifi_storage.get::<String>("password").ok().and_then(|s| Password::from_bytes(s.as_bytes()).ok());
 
-        let wifi_running;
-
         if let (Some(ssid), Some(password)) = (ssid, password) {
-          wifi_running = match wifi_manager::connect_ssid_password(wifi, ssid, password).await {
-            Ok(wifi) => wifi,
-            Err(err) => {
+          match wifi_manager::connect_ssid_password(&mut wifi, ssid, password).await {
+            Ok(_) => (),
+            Err(_) => {
               println!("Starting Access Point '{}' …", ap_config.ssid());
-              err.wifi().start_ap(ap_config).expect("Failed to start access point")
+              wifi.start_ap(ap_config).expect("Failed to start access point");
             },
           };
         } else {
           println!("Starting Access Point '{}' …", ap_config.ssid());
-          wifi_running = wifi.start_ap(ap_config).expect("Failed to start access point");
+          wifi.start_ap(ap_config).expect("Failed to start access point");
         }
 
         let stream = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 80)).expect("failed starting TCP listener");
 
-        let wifi_running = Arc::new(Mutex::new(Some(wifi_running)));
+        let wifi = Arc::new(Mutex::new(wifi));
         let wifi_storage = Arc::new(Mutex::new(wifi_storage));
 
         loop {
@@ -124,12 +122,12 @@ async fn rust_blink_and_write() -> Result<!, EspError> {
           match client {
             Ok((client, addr)) => {
               let wifi_storage = Arc::clone(&wifi_storage);
-              let wifi_running = Arc::clone(&wifi_running);
+              let wifi = Arc::clone(&wifi);
 
               thread::Builder::new()
                 .stack_size(8192)
                 .spawn(move || block_on(async {
-                  handle_request(client, addr, wifi_storage, wifi_running).await
+                  handle_request(client, addr, wifi_storage, wifi).await
                 }))
                 .unwrap();
             },
