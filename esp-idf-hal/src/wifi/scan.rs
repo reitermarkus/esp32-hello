@@ -1,6 +1,5 @@
 use core::cmp;
 use core::future::Future;
-use core::marker::PhantomData;
 use core::mem::{self, MaybeUninit};
 use core::pin::Pin;
 use core::ptr;
