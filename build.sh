@@ -64,15 +64,40 @@ export IDF_TOOLS_PATH
 
 mkdir -p "${IDF_TOOLS_PATH}"
 
+idf_version="$(git -C "${IDF_PATH}" rev-parse HEAD 2>/dev/null || true)"
+version_file="${IDF_TOOLS_PATH}/installed_version"
+
+if ! [[ -f "${version_file}" ]] || [[ "${idf_version}" != "$(cat "${version_file}")" ]]; then
+  case "${CHIP}" in
+    esp32)
+      "${IDF_PATH}/install.sh"
+      ;;
+    esp8266)
+      python -m pip install --user -r "${IDF_PATH}/requirements.txt"
+      ;;
+  esac
+
+  if [[ -n "${idf_version:-}" ]]; then
+    echo "${idf_version}" > "${version_file}"
+  fi
+fi
+
+export PATH="$(brew --prefix rust-xtensa)/bin:$(brew --prefix llvm-xtensa)/bin:${PATH}"
+
+source "${IDF_PATH}/export.sh" >/dev/null
+
+
 if [[ "${CHIP}" = 'esp32' ]]; then
   ln -sfn sdkconfig.esp32 app/sdkconfig
 else
   ln -sfn sdkconfig.esp8266 app/sdkconfig
 fi
 
-cross build ${PROFILE:+"--${PROFILE}"} --target "${TARGET}" ${PACKAGE:+--package "${PACKAGE}"} ${EXAMPLE:+--example "${EXAMPLE}"}
+export CARGO_TARGET_DIR="$(pwd)/target"
 
-cross doc ${PROFILE:+"--${PROFILE}"} --target "${TARGET}" --no-deps
+cargo build ${PROFILE:+"--${PROFILE}"} --target "${TARGET}" ${PACKAGE:+--package "${PACKAGE}"} ${EXAMPLE:+--example "${EXAMPLE}"}
+
+cargo doc ${PROFILE:+"--${PROFILE}"} --target "${TARGET}" --no-deps
 
 if [[ -z "${SERIAL_PORT}" ]]; then
   exit
@@ -82,6 +107,29 @@ esptool() {
   "${IDF_PATH}/components/esptool_py/esptool/esptool.py" --chip "${CHIP}" --port "${SERIAL_PORT}" ${FLASH_BAUDRATE:+--baud "${FLASH_BAUDRATE}"} "${@}" | \
     grep -E -v 'esptool.py|Serial port|Changing baud rate|Changed.|Uploading stub|Running stub|Stub running|Configuring flash size|Leaving'
 }
+
+mapfile -t binary_targets < <(
+  cargo metadata --format-version 1 \
+  | jq -c '
+      .workspace_members as $members | .packages
+      | map(select(.id as $id | $members[] | contains($id) ))
+      | map(.targets)[] | map(select(.kind[] | contains("bin") or contains("example")))[]
+      | .name
+    ' -r
+)
+
+for binary_target in "${binary_targets[@]}"; do
+  for t in "${CARGO_TARGET_DIR}"/${TARGET}/{release,debug}/{,examples/}"${binary_target}"; do
+    if [[ -f "${t}" ]]; then
+      "${IDF_PATH}/components/esptool_py/esptool/esptool.py" \
+        --chip "${CHIP}" \
+        elf2image \
+        --version "${ELF2IMAGE_VERSION}" \
+        -o "${t}.bin" \
+        "${t}" | tail -n +2
+    fi
+  done
+done
 
 FLASH_ARGS=( -z --flash_mode dio --flash_freq 80m --flash_size detect )
 
